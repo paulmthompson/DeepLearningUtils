@@ -70,13 +70,24 @@ class EfficientViT_B(nn.Module):
 
         input_channels = input_shape[0]
 
-        self.stem_conv = Conv2dSame(
-            input_channels,
-            stem_width,
-            kernel_size=(3, 3),
-            stride=(2, 2))
-        self.stem_bn = nn.BatchNorm2d(stem_width, eps=1e-3) if use_norm else nn.Identity()
-        self.stem_activation = activation
+        if anti_aliasing:
+            self.stem_conv = Conv2dSame(
+                input_channels,
+                stem_width,
+                kernel_size=(3, 3),
+                stride=(1, 1))
+            self.stem_bn = nn.BatchNorm2d(stem_width, eps=1e-3) if use_norm else nn.Identity()
+            self.stem_activation = activation
+            self.stem_blur = Blur2D(kernel_size=5, stride=2, kernel_type="Binomial", padding='same')
+        else:
+            self.stem_conv = Conv2dSame(
+                input_channels,
+                stem_width,
+                kernel_size=(3, 3),
+                stride=(2, 2))
+            self.stem_bn = nn.BatchNorm2d(stem_width, eps=1e-3) if use_norm else nn.Identity()
+            self.stem_activation = activation
+            self.stem_blur = nn.Identity()
 
         self.stem_mb_conv = MBConv(
             stem_width,
@@ -112,6 +123,8 @@ class EfficientViT_B(nn.Module):
             is_conv_block = block_type[0].lower() == "c"
             cur_expansions = self.expansions[stack_id] if isinstance(self.expansions, (list, tuple)) else self.expansions
 
+            block_anti_aliasing = self.anti_aliasing if stack_id <= 2 else False
+
             block_use_bias, block_use_norm = (True, False) if stack_id >= 2 else (False, True)
             if not self.use_norm:
                 block_use_norm = False
@@ -142,7 +155,7 @@ class EfficientViT_B(nn.Module):
                         drop_rate=block_drop_rate,
                         activation=self.activation,
                         initializer=None,
-                        anti_aliasing=self.anti_aliasing,
+                        anti_aliasing=block_anti_aliasing,
                         name=cur_name))
                 else:
                     num_heads = out_channel // self.head_dimension
@@ -168,7 +181,7 @@ class EfficientViT_B(nn.Module):
                         drop_rate=block_drop_rate,
                         activation=self.activation,
                         initializer=None,
-                        anti_aliasing=self.anti_aliasing,
+                        anti_aliasing=block_anti_aliasing,
                         name=name))
 
                 block_input_channels = out_channel
@@ -188,6 +201,7 @@ class EfficientViT_B(nn.Module):
         x = self.stem_conv(x)
         x = self.stem_bn(x)
         x = self.stem_activation(x)
+        x = self.stem_blur(x)
         x = self.stem_mb_conv(x)
         outputs.append(x)
 
@@ -218,6 +232,7 @@ class EfficientViT_B(nn.Module):
         x = self.stem_conv(x)
         x = self.stem_bn(x)
         x = self.stem_activation(x)
+        x = self.stem_blur(x)
         x = self.stem_mb_conv(x)
         outputs.append(x)
         for i, block in enumerate(self.blocks):
