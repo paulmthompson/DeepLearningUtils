@@ -1,8 +1,5 @@
 
 
-import keras
-import numpy as np
-
 """
 This implements a blur layer to be used with max pooling or convolutions for anti-aliasing.
 
@@ -14,6 +11,10 @@ Github repository for original implementation:
 https://github.com/adobe/antialiased-cnns
 
 """
+
+import keras
+import numpy as np
+
 
 class Blur2D(keras.layers.Layer):
     def __init__(self, 
