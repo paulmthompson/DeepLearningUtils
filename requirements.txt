@@ -1,0 +1,5 @@
+# requirements.txt
+keras
+numpy
+torch
+pytest
