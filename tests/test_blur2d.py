@@ -1,5 +1,9 @@
 
 import pytest
+
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
 import numpy as np
 import torch
 import keras
