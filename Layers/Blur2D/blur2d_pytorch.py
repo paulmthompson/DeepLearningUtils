@@ -24,7 +24,7 @@ class Blur2D(nn.Module):
         self.kernel_size = kernel_size
         if kernel_type == "Rect":
 
-            self.kernel2d = torch.ones((self.kernel_size, self.kernel_size, 1, 1))
+            self.kernel2d = torch.ones((self.kernel_size, self.kernel_size))
             self.kernel2d /= self.kernel2d.sum()
 
         elif kernel_type == "Triangle":
