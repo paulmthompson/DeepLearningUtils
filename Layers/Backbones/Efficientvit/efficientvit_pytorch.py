@@ -16,7 +16,7 @@
 
     Modified by Paul Thompson 2024
 """
-from Attention.EfficientViT_LiteMHSA.litemhsa_pytorch import LiteMHSA
+from Layers.Attention.EfficientViT_LiteMHSA.litemhsa_pytorch import LiteMHSA
 from Layers.Blur2D.blur2d_pytorch import Blur2D
 from Layers.Convolution.conv2d_same_pytorch import Conv2dSame
 from Layers.Convolution.mbconv_pytorch import MBConv
