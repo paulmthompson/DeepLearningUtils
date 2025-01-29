@@ -1,5 +1,8 @@
 # requirements.txt
 keras
 numpy
-torch
 pytest
+
+# Optional dependencies
+torch; extra == "torch"
+tensorflow; extra == "tensorflow"
