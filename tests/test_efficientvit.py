@@ -58,5 +58,11 @@ def test_model_conversion(
     # Compare outputs
     np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-5)
 
+    # Create JIT compiled PyTorch model
+    pytorch_model_jit = torch.jit.script(pytorch_model)
+    pytorch_jit_result = pytorch_model_jit(input_tensor)[0].detach().numpy().transpose(0, 2, 3, 1)
+
+    # Compare JIT results
+    np.testing.assert_allclose(pytorch_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)
 if __name__ == "__main__":
     pytest.main([__file__])

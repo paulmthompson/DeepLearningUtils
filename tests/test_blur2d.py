@@ -31,5 +31,12 @@ def test_blur2d_layers():
     # Compare results
     np.testing.assert_allclose(keras_result, pytorch_result, rtol=1e-5, atol=1e-5)
 
+
+    # Create JIT compiled PyTorch model
+    pytorch_model = torch.jit.script(pytorch_layer)
+    pytorch_jit_result = pytorch_model(pytorch_input).detach().numpy().transpose(0, 2, 3, 1)
+
+    # Compare JIT results
+    np.testing.assert_allclose(pytorch_result, pytorch_jit_result, rtol=1e-5, atol=1e-5)
 if __name__ == "__main__":
     pytest.main()
