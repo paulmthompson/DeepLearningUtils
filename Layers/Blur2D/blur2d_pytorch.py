@@ -51,7 +51,11 @@ class Blur2D(nn.Module):
 
         self.kernel2d = self.kernel2d.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
         self.stride = stride
-        self.padding = padding
+        self.padding_same = padding == 'same'
+        if self.padding_same:
+            self.padding = 0
+        else:
+            self.padding = padding
 
     def calc_same_pad(self, i: int, k: int, s: int) -> int:
         return max((math.ceil(i / s) - 1) * s + (k - 1) * 1 + 1 - i, 0)
@@ -61,12 +65,9 @@ class Blur2D(nn.Module):
         batch_size, channels, height, width = x.size()
         kernel = self.kernel2d.repeat(channels, 1, 1, 1).to(x.device)
 
-        if self.padding == 'same':
+        if self.padding_same:
             pad_h = self.calc_same_pad(i=height, k=self.kernel2d.shape[2], s=self.stride)
             pad_w = self.calc_same_pad(i=width, k=self.kernel2d.shape[3], s=self.stride)
-
-            print('pad_h:', pad_h)
-            print('pad_w:', pad_w)
 
             if pad_h > 0 or pad_w > 0:
                 x = F.pad(
