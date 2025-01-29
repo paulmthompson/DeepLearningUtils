@@ -40,7 +40,7 @@ class EfficientViT_B(nn.Module):
                  expansions=4,
                  is_fused=False,
                  head_dimension=16,
-                 output_filters=[1024, 1280],
+                 output_filters=1024,
                  input_shape=(3, 224, 224), 
                  activation=nn.ReLU(),
                  drop_connect_rate=0,
@@ -104,13 +104,13 @@ class EfficientViT_B(nn.Module):
 
         self.blocks = nn.Sequential(*self._make_blocks(stem_width))
 
-        if output_filters[0] > 0:
+        if output_filters > 0:
             self.features_conv = torch.nn.Conv2d(
                 out_channels[-1],
-                output_filters[0],
+                output_filters,
                 kernel_size=(1, 1),
                 stride=(1, 1))
-            self.features_bn = nn.BatchNorm2d(output_filters[0],eps=1e-3) if use_norm else nn.Identity()
+            self.features_bn = nn.BatchNorm2d(output_filters,eps=1e-3) if use_norm else nn.Identity()
             self.features_activation = activation
 
     def _make_blocks(self, block_input_channels):
@@ -211,7 +211,7 @@ class EfficientViT_B(nn.Module):
                 if i in intermediate_outputs:
                     outputs.append(x)
 
-        if self.output_filters[0] > 0:
+        if self.output_filters > 0:
             x = self.features_conv(x)
             x = self.features_bn(x)
             x = self.features_activation(x)

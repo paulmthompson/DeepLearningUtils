@@ -45,7 +45,7 @@ def EfficientViT_B(
     expansions=4,  # int or list, each element in list can also be an int or list of int
     is_fused=False,  # True for L models, False for B models
     head_dimension=16,  # `num_heads = channels // head_dimension`
-    output_filters=[1024, 1280],
+    output_filters=1024,
     input_shape=(224, 224, 3),
     activation="keras.activations.relu",  # "keras.activations.hard_silu" is in the paper, but i find poor performance
     drop_connect_rate=0,
@@ -175,10 +175,9 @@ def EfficientViT_B(
                     name=name)
             global_block_id += 1
 
-    output_filters = output_filters if isinstance(output_filters, (list, tuple)) else (output_filters, 0)
-    if output_filters[0] > 0:
+    if output_filters > 0:
         nn = keras.layers.Conv2D(
-            output_filters[0],
+            output_filters,
             1,
             kernel_initializer=initializer,
             name="features_conv")(nn)
