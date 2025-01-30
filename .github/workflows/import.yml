@@ -22,12 +22,13 @@ jobs:
     - name: Install DeepLearningUtils with TensorFlow
       run: |
         python -m pip install --upgrade pip
-        pip install .[tensorflow]
+        pip install -e .[tensorflow]
 
     - name: Set PYTHONPATH
       run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
 
     - name: Run import script
       run: |
+        cd ..
         echo "import DeepLearningUtils" > import_script.py
         python import_script.py
