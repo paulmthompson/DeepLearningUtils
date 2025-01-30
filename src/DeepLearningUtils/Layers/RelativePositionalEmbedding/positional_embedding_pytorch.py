@@ -97,7 +97,7 @@ class RelativePositionalEmbedding2D(nn.Module):
         q_t_ratio = round(max(self.key_seq_len / self.query_seq_len, 1.0))
         k_t_ratio = round(max(self.query_seq_len / self.key_seq_len, 1.0))
 
-        dist_t = torch.arange(1).unsqueeze(1) * q_t_ratio - torch.arange(self.seq_len).unsqueeze(0) * k_t_ratio
+        dist_t = torch.arange(self.query_seq_len).unsqueeze(1) * q_t_ratio - torch.arange(self.key_seq_len).unsqueeze(0) * k_t_ratio
         dist_t += (self.key_seq_len - 1) * k_t_ratio # [q_seq_len, key_seq_len]
 
         Rh = self.height_embeddings[dist_h]
@@ -114,7 +114,7 @@ class RelativePositionalEmbedding2D(nn.Module):
         rel_w = torch.einsum("bNthwc,wkc->bNthwk", query_reshaped, Rw)
         rel_t = torch.einsum("bNthwc,tkc->bNthwk", query_reshaped, Rt)
 
-        scores = scores.view(-1, self.heads, self.query_seq_len, q_h, q_w, self.seq_len, k_h, k_w)
+        scores = scores.view(-1, self.heads, self.query_seq_len, q_h, q_w, self.key_seq_len, k_h, k_w)
 
         scores += rel_h[:, :, :, :, :, None, :, None]
         scores += rel_w[:, :, :, :, :, None, None, :]
@@ -235,3 +235,13 @@ class RelativePositionalEmbedding2DKey(nn.Module):
         )
 
         return scores
+
+
+def load_positionaL_embedding_layer_weights(keras_layer, pytorch_module):
+
+    print(f"Loading custom layer weights for {keras_layer.name}")
+
+    weights = keras_layer.get_weights()
+    pytorch_module.height_embeddings.data = torch.tensor(weights[0])
+    pytorch_module.width_embeddings.data = torch.tensor(weights[1])
+    pytorch_module.time_embeddings.data = torch.tensor(weights[2])

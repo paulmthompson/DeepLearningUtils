@@ -71,7 +71,10 @@ def load_linear_weights(keras_layer, pytorch_module):
         print(f"Skipping non-Linear layer {keras_layer.name}")
 
 
-def load_keras_weights_to_pytorch_by_name(keras_model, pytorch_model):
+def load_keras_weights_to_pytorch_by_name(keras_model, pytorch_model, custom_loaders=None):
+
+    if custom_loaders is None:
+        custom_loaders = {}
 
     for layer in keras_model.layers:
         keras_layer_name = layer.name
@@ -81,15 +84,17 @@ def load_keras_weights_to_pytorch_by_name(keras_model, pytorch_model):
         for name, module in pytorch_model.named_modules():
 
             #trim name to what is after last dot
-            name = name.split(".")[-    1]
+            name = name.split(".")[-1]
 
             if name == keras_layer_name:
                 print(f"Loading {name}")
 
-                if isinstance(module, nn.Conv2d):
+                if name in custom_loaders:
+                    custom_loaders[name](layer, module)
+                elif isinstance(module, nn.Conv2d):
                     load_conv2d_weights(layer, module)
                 elif isinstance(module, nn.BatchNorm2d):
-                        load_batchnorm_weights(layer, module)
+                    load_batchnorm_weights(layer, module)
                 elif isinstance(module, nn.Linear):
                     load_linear_weights(layer, module)
                 else:
