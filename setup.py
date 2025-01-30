@@ -11,7 +11,7 @@ setup(
         # Add other common dependencies here
     ],
     extras_require={
-        'torch': ['torch'],
+        'torch': ['torch', 'torchvision'],
         'tensorflow': ['tensorflow'],
     },
     entry_points={

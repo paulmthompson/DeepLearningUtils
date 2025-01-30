@@ -5,4 +5,5 @@ pytest
 
 # Optional dependencies
 torch; extra == "torch"
+torchvision; extra == "torch"
 tensorflow; extra == "tensorflow"
