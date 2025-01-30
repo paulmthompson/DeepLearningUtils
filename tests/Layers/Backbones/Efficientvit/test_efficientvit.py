@@ -28,16 +28,19 @@ def test_model_conversion(
 
     #block_types=["conv", "conv", "conv", "conv"]
     use_norm = True
-    block_types = ["conv", "conv", "transform", "transform"],
+    block_types = ["conv", "conv", "transform", "transform"]
+    upsample_levels = 1
 
     keras_model = KerasEfficientViT(
         block_types=block_types,
         use_norm=use_norm,
+        upsample_levels=upsample_levels
     ).to(device)
 
     pytorch_model = PyTorchEfficientViT(
         block_types=block_types,
         use_norm=use_norm,
+        upsample_levels=upsample_levels
     ).to(device)
     # Generate random input data
     input_data = np.random.rand(1, 224, 224, 3).astype(np.float32)

@@ -53,9 +53,17 @@ def EfficientViT_B(
     use_norm=True,
     initializer=None,
     anti_aliasing=False,
+    upsample_levels=0,
     model_name="efficientvit",
     kwargs=None
 ):
+
+    #upsample levels should be value between 0 and len(num_blocks)
+    if upsample_levels < 0 or upsample_levels >= len(num_blocks):
+        raise ValueError("upsample_levels should be value between 0 and len(num_blocks)")
+
+    if len(num_blocks) != len(out_channels) or len(num_blocks) != len(block_types):
+        raise ValueError("num_blocks, out_channels, block_types should have same length")
     
     if initializer is None:
         initializer = keras.initializers.GlorotUniform()
@@ -106,6 +114,7 @@ def EfficientViT_B(
     """ stage [1, 2, 3, 4] """ # 1/4, 1/8, 1/16, 1/32
     total_blocks = sum(num_blocks)
     global_block_id = 0
+    stack_outputs = []
     for stack_id, (num_block, out_channel, block_type) in enumerate(zip(num_blocks, out_channels, block_types)):
         is_conv_block = True if block_type[0].lower() == "c" else False
         cur_expansions = expansions[stack_id] if isinstance(expansions, (list, tuple)) else expansions
@@ -174,6 +183,13 @@ def EfficientViT_B(
                     anti_aliasing=block_anti_aliasing,
                     name=name)
             global_block_id += 1
+
+        stack_outputs.append(nn)
+
+    for upsample_level in range(upsample_levels):
+        nn = keras.layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(nn)
+        stack_id = (upsample_level + 2) * -1
+        nn = keras.layers.Concatenate()([nn, stack_outputs[stack_id]])
 
     if output_filters > 0:
         nn = keras.layers.Conv2D(

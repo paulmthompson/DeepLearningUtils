@@ -44,6 +44,7 @@ class EfficientViT_B(nn.Module):
                  use_norm=True,
                  initializer=None,
                  anti_aliasing=False,
+                 upsample_levels=0,
                  model_name="efficientvit",
                  kwargs=None):
         super(EfficientViT_B, self).__init__()
@@ -60,6 +61,11 @@ class EfficientViT_B(nn.Module):
         self.dropout = dropout
         self.use_norm = use_norm
         self.anti_aliasing = anti_aliasing
+        self.upsample_levels = upsample_levels
+        self.stack_output_indices = []
+
+        for i in range(len(num_blocks)):
+            self.stack_output_indices.append(sum(num_blocks[:i + 1]))
 
         if initializer is None:
             initializer = nn.init.xavier_uniform_
@@ -100,9 +106,20 @@ class EfficientViT_B(nn.Module):
 
         self.blocks = nn.Sequential(*self._make_blocks(stem_width))
 
+        self.upsample_blocks = nn.ModuleList()
+
+
+        feature_conv_input = out_channels[-1]
+        for i in range(upsample_levels):
+            # upsample bilinearly and concatenate with the previous feature map
+
+            self.upsample_blocks.append(nn.Sequential(
+                torch.nn.UpsamplingBilinear2d(scale_factor=2)))
+            feature_conv_input += out_channels[-1]
+
         if output_filters > 0:
             self.features_conv = torch.nn.Conv2d(
-                out_channels[-1],
+                feature_conv_input,
                 output_filters,
                 kernel_size=(1, 1),
                 stride=(1, 1))
@@ -203,9 +220,11 @@ class EfficientViT_B(nn.Module):
 
         for i, block in enumerate(self.blocks):
             x = block(x)
-            if intermediate_outputs is not None:
-                if i in intermediate_outputs:
-                    outputs.append(x)
+            outputs.append(x)
+
+        for i, upsample_block in enumerate(self.upsample_blocks):
+            x = upsample_block(x)
+            x = torch.cat([x, outputs[self.stack_output_indices[-(2 + i)]]], dim=1)
 
         if self.output_filters > 0:
             x = self.features_conv(x)
