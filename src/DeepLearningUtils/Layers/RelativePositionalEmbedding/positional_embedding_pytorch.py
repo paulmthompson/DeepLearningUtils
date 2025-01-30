@@ -84,6 +84,7 @@ class RelativePositionalEmbedding2D(nn.Module):
             torch.arange(q_h).unsqueeze(1) * q_h_ratio - torch.arange(k_h).unsqueeze(0) * k_h_ratio
         )
         dist_h += (k_h - 1) * k_h_ratio # [qh, kh]
+        dist_h = dist_h.int()
 
         q_w = self.query_width
         k_w = self.key_width
@@ -93,12 +94,14 @@ class RelativePositionalEmbedding2D(nn.Module):
             torch.arange(q_w).unsqueeze(1) * q_w_ratio - torch.arange(k_w).unsqueeze(0) * k_w_ratio
         )
         dist_w += (k_w - 1) * k_w_ratio # [qw, kw]
+        dist_w = dist_w.int()
 
         q_t_ratio = round(max(self.key_seq_len / self.query_seq_len, 1.0))
         k_t_ratio = round(max(self.query_seq_len / self.key_seq_len, 1.0))
 
         dist_t = torch.arange(self.query_seq_len).unsqueeze(1) * q_t_ratio - torch.arange(self.key_seq_len).unsqueeze(0) * k_t_ratio
         dist_t += (self.key_seq_len - 1) * k_t_ratio # [q_seq_len, key_seq_len]
+        dist_t = dist_t.int()
 
         Rh = self.height_embeddings[dist_h]
         Rw = self.width_embeddings[dist_w]
@@ -187,6 +190,7 @@ class RelativePositionalEmbedding2DKey(nn.Module):
             torch.arange(k_h).unsqueeze(1) * k_h_ratio - torch.arange(q_h).unsqueeze(0) * q_h_ratio
         )
         dist_h += (q_h - 1) * q_h_ratio # [kh, qh]
+        dist_h = dist_h.int()
 
         q_w = self.query_width
         k_w = self.key_width
@@ -198,6 +202,7 @@ class RelativePositionalEmbedding2DKey(nn.Module):
             torch.arange(k_w).unsqueeze(1) * k_w_ratio - torch.arange(q_w).unsqueeze(0) * q_w_ratio
         )
         dist_w += (q_w - 1) * q_w_ratio # [kw, qw]
+        dist_w = dist_w.int()
 
         q_t_ratio = round(max(self.key_seq_len / self.query_seq_len, 1.0))
         k_t_ratio = round(max(self.query_seq_len / self.key_seq_len, 1.0))
@@ -206,6 +211,7 @@ class RelativePositionalEmbedding2DKey(nn.Module):
             torch.arange(self.key_seq_len).unsqueeze(1) * k_t_ratio - torch.arange(self.query_seq_len).unsqueeze(0) * q_t_ratio
         )
         dist_t += (self.query_seq_len - 1) * q_t_ratio # [key_seq_len, q_seq_len]
+        dist_t = dist_t.int()
 
         Rh = self.height_embeddings[dist_h]
         Rw = self.width_embeddings[dist_w]

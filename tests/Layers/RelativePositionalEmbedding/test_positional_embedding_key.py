@@ -53,3 +53,10 @@ def test_positional_embedding_layer_key(query_shape, key_shape, query_dim, heads
 
     # Compare outputs
     np.testing.assert_allclose(keras_output, torch_output, rtol=1e-5, atol=1e-3)
+
+    # Create JIT compiled PyTorch model
+    pytorch_model_jit = torch.jit.script(torch_layer)
+    pytorch_jit_result = pytorch_model_jit(torch_input_key, torch_input_scores).detach().numpy()
+
+    # Compare JIT results
+    np.testing.assert_allclose(torch_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)
