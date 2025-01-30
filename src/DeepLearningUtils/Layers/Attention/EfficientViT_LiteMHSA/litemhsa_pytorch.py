@@ -18,15 +18,13 @@
 
 """
 
-from Layers.Convolution.conv2d_same_pytorch import Conv2dSame
+from src.DeepLearningUtils.Layers.Convolution.conv2d_same_pytorch import Conv2dSame
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import collections
 
-from typing import List, Optional, Tuple
 
 class LiteMHSA(nn.Module):
     def __init__(self,

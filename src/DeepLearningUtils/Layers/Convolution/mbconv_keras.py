@@ -26,10 +26,9 @@ Modified by Paul Thompson 2024
 
 """
 
-from Layers.Blur2D.blur2d_keras import Blur2D
+from src.DeepLearningUtils.Layers.Blur2D.blur2d_keras import Blur2D
 
-import keras 
-import numpy as np
+import keras
 
 
 def mb_conv(

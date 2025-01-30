@@ -10,7 +10,7 @@ def test_import_torch():
 
 def test_import_efficientvit_pytorch():
     try:
-        efficientvit_pytorch = importlib.import_module('Layers.Backbones.Efficientvit.efficientvit_pytorch')
+        efficientvit_pytorch = importlib.import_module('src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_pytorch')
         assert efficientvit_pytorch is not None
     except ImportError:
         pytest.fail("EfficientViT PyTorch implementation is not installed")

@@ -16,17 +16,13 @@
 
     Modified by Paul Thompson 2024
 """
-from Layers.Attention.EfficientViT_LiteMHSA.litemhsa_pytorch import LiteMHSA
-from Layers.Blur2D.blur2d_pytorch import Blur2D
-from Layers.Convolution.conv2d_same_pytorch import Conv2dSame
-from Layers.Convolution.mbconv_pytorch import MBConv
+from src.DeepLearningUtils.Layers.Attention.EfficientViT_LiteMHSA.litemhsa_pytorch import LiteMHSA
+from src.DeepLearningUtils.Layers.Blur2D.blur2d_pytorch import Blur2D
+from src.DeepLearningUtils.Layers.Convolution.conv2d_same_pytorch import Conv2dSame
+from src.DeepLearningUtils.Layers.Convolution.mbconv_pytorch import MBConv
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import math
-import collections
 
 from typing import List, Optional, Tuple
 

@@ -30,9 +30,9 @@ mostly to make it Keras3 compatible.
 
 """
 
-from Layers.Blur2D.blur2d_keras import Blur2D
-from Layers.Convolution.mbconv_keras import mb_conv
-from Layers.Attention.EfficientViT_LiteMHSA.litemhsa_keras import lite_mhsa
+from src.DeepLearningUtils.Layers.Blur2D.blur2d_keras import Blur2D
+from src.DeepLearningUtils.Layers.Convolution.mbconv_keras import mb_conv
+from src.DeepLearningUtils.Layers.Attention.EfficientViT_LiteMHSA.litemhsa_keras import lite_mhsa
 
 import keras
 

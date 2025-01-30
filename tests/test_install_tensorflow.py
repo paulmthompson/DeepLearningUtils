@@ -10,7 +10,7 @@ def test_import_tensorflow():
 
 def test_import_efficientvit_keras():
     try:
-        efficientvit_keras = importlib.import_module('Layers.Backbones.Efficientvit.efficientvit_keras')
+        efficientvit_keras = importlib.import_module('src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_keras')
         assert efficientvit_keras is not None
     except ImportError:
         pytest.fail("EfficientViT Keras implementation is not installed")

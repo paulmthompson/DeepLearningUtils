@@ -8,8 +8,8 @@ import numpy as np
 import torch
 import keras
 
-from Layers.Blur2D.blur2d_keras import Blur2D as Blur2D_Keras
-from Layers.Blur2D.blur2d_pytorch import Blur2D as Blur2D_PyTorch
+from src.DeepLearningUtils.Layers.Blur2D.blur2d_keras import Blur2D as Blur2D_Keras
+from src.DeepLearningUtils.Layers.Blur2D.blur2d_pytorch import Blur2D as Blur2D_PyTorch
 
 
 def test_blur2d_layers():

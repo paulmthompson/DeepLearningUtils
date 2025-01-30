@@ -6,10 +6,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import torch
 import numpy as np
-import keras
-from Layers.Backbones.Efficientvit.efficientvit_keras import EfficientViT_B as KerasEfficientViT
-from Layers.Backbones.Efficientvit.efficientvit_pytorch import EfficientViT_B as PyTorchEfficientViT
-from utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
+from src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_keras import EfficientViT_B as KerasEfficientViT
+from src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_pytorch import EfficientViT_B as PyTorchEfficientViT
+from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
 
 """
 @pytest.fixture
