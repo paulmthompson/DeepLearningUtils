@@ -54,6 +54,7 @@ def EfficientViT_B(
     initializer=None,
     anti_aliasing=False,
     upsample_levels=0,
+    use_features_activation=False,
     model_name="efficientvit",
     kwargs=None
 ):
@@ -197,9 +198,10 @@ def EfficientViT_B(
             1,
             kernel_initializer=initializer,
             name="features_conv")(nn)
-        if use_norm:
-            nn = keras.layers.BatchNormalization(momentum=0.9, name="features_bn")(nn)
-        nn = keras.layers.Activation(activation_func, name="features_activation")(nn)
+        if use_features_activation:
+            if use_norm:
+                nn = keras.layers.BatchNormalization(momentum=0.9, name="features_bn")(nn)
+            nn = keras.layers.Activation(activation_func, name="features_activation")(nn)
 
     model = keras.models.Model(inputs, nn, name=model_name)
 

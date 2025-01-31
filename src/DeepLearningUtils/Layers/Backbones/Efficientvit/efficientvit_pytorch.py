@@ -45,6 +45,7 @@ class EfficientViT_B(nn.Module):
                  initializer=None,
                  anti_aliasing=False,
                  upsample_levels=0,
+                 use_features_activation=False,
                  model_name="efficientvit",
                  kwargs=None):
         super(EfficientViT_B, self).__init__()
@@ -63,6 +64,7 @@ class EfficientViT_B(nn.Module):
         self.anti_aliasing = anti_aliasing
         self.upsample_levels = upsample_levels
         self.stack_output_indices = []
+        self.use_features_activation = use_features_activation
 
         for i in range(len(num_blocks)):
             self.stack_output_indices.append(sum(num_blocks[:i + 1]))
@@ -123,8 +125,9 @@ class EfficientViT_B(nn.Module):
                 output_filters,
                 kernel_size=(1, 1),
                 stride=(1, 1))
-            self.features_bn = nn.BatchNorm2d(output_filters,eps=1e-3) if use_norm else nn.Identity()
-            self.features_activation = activation
+            use_feature_norm = use_norm and use_features_activation
+            self.features_bn = nn.BatchNorm2d(output_filters,eps=1e-3) if use_feature_norm else nn.Identity()
+            self.features_activation = activation if use_features_activation else nn.Identity()
 
     def _make_blocks(self, block_input_channels):
         blocks = []
