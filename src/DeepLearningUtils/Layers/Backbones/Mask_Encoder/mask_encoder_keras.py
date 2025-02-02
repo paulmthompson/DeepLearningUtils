@@ -7,7 +7,8 @@ import keras
 def create_mask_encoder(
         input_shape,
         output_channels,
-        anti_aliasing=True,):
+        anti_aliasing=True,
+        use_norm=True):
     """
 
     Sam mask encoder tries to keep the same number of h x w x c channels as the input tensor.
@@ -41,7 +42,8 @@ def create_mask_encoder(
             strides=(2, 2),
             padding='same',
             name="conv1")(inputs)  # (b, 128, 128, 4)
-    x = LayerNorm2d(4, name="norm1")(x)
+    if use_norm:
+        x = LayerNorm2d(4, name="norm1")(x)
     x = keras.layers.Activation(keras.activations.hard_swish)(x)
 
     if anti_aliasing:
@@ -60,7 +62,8 @@ def create_mask_encoder(
             strides=(4, 4),
             padding='same',
             name="conv2")(x)  # (b, 32, 32, 64)
-    x = LayerNorm2d(64, name="norm2")(x)
+    if use_norm:
+        x = LayerNorm2d(64, name="norm2")(x)
     x = keras.layers.Activation(keras.activations.hard_swish)(x)
 
 
@@ -72,7 +75,8 @@ def create_mask_encoder(
         name="conv3")(x)
 
     if output_channels != x.shape[-1]:
-        x = LayerNorm2d(x.shape[-1])(x)
+        if use_norm:
+            x = LayerNorm2d(x.shape[-1])(x)
         x = keras.layers.Activation(keras.activations.hard_swish)(x)
 
         x = keras.layers.Conv2D(output_channels, (1, 1), padding='same', name="mask_embedding_conv")(x)

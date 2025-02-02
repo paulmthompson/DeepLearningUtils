@@ -5,7 +5,7 @@ import keras
 class LayerNorm2d(keras.layers.Layer):
     def __init__(self,
                  num_channels: int,
-                 eps: float = 1e-6,
+                 eps: float = 1e-3,
                  **kwargs):
         """
 

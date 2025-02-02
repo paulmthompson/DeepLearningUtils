@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 class MaskEncoder(nn.Module):
-    def __init__(self, input_channels, output_channels, anti_aliasing=True):
+    def __init__(self, input_channels, output_channels, anti_aliasing=True, use_norm=True):
         super(MaskEncoder, self).__init__()
         self.anti_aliasing = anti_aliasing
         self.output_channels = output_channels
@@ -20,7 +20,7 @@ class MaskEncoder(nn.Module):
             self.conv1 = Conv2dSame(input_channels, 4, kernel_size=2, stride=2)
             self.blur1 = nn.Identity()
 
-        self.norm1 = LayerNorm2d(4)
+        self.norm1 = LayerNorm2d(4) if use_norm else nn.Identity()
         self.activation1 = nn.Hardswish()
 
         if anti_aliasing:
@@ -32,7 +32,7 @@ class MaskEncoder(nn.Module):
             self.blur2_1 = nn.Identity()
             self.blur2_2 = nn.Identity()
 
-        self.norm2 = LayerNorm2d(64)
+        self.norm2 = LayerNorm2d(64) if use_norm else nn.Identity()
         self.activation2 = nn.Hardswish()
 
         self.conv3 = Conv2dSame(64, 256, kernel_size=2, stride=2)
