@@ -33,8 +33,10 @@ class LayerNorm2d(keras.layers.Layer):
         super(LayerNorm2d, self).build(input_shape)
 
     def call(self, x):
-        u = keras.ops.mean(x, axis=[1, 2], keepdims=True)
-        s = keras.ops.mean(keras.ops.square(x - u), axis=[1, 2], keepdims=True)
+        #u = keras.ops.mean(x, axis=[1, 2], keepdims=True)
+        #s = keras.ops.mean(keras.ops.square(x - u), axis=[1, 2], keepdims=True)
+        u = keras.ops.mean(x, axis=-1, keepdims=True)
+        s = keras.ops.mean(keras.ops.square(x - u), axis=-1, keepdims=True)
         x = (x - u) / keras.ops.sqrt(s + self.eps)
         x = self.weight[None, None, :] * x + self.bias[None, None, :]
         return x

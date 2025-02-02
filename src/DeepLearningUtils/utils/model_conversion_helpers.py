@@ -7,6 +7,8 @@ os.environ["KERAS_BACKEND"] = "torch"
 
 import keras
 
+from src.DeepLearningUtils.Layers.LayerNorm2D.layernorm2d_pytorch import LayerNorm2d
+
 
 def get_keras_weights_by_name(keras_layer):
 
@@ -57,6 +59,13 @@ def load_batchnorm_weights(keras_layer, pytorch_module):
     else:
         print(f"Skipping non-BatchNorm2d layer {keras_layer.name}")
 
+def load_layernorm2d_weights(keras_layer, pytorch_module):
+    if isinstance(pytorch_module, LayerNorm2d):
+        print("Loading LayerNorm2d weights for", keras_layer.name)
+        pytorch_module.weight.data = torch.tensor(keras_layer.weight.numpy())
+        pytorch_module.bias.data = torch.tensor(keras_layer.bias.numpy())
+    else:
+        print(f"Skipping non-LayerNorm2d layer {keras_layer.name}")
 
 def load_linear_weights(keras_layer, pytorch_module):
     if isinstance(pytorch_module, nn.Linear):
@@ -96,6 +105,8 @@ def load_keras_layer_weights(layer, pytorch_model, custom_loaders=None):
                 load_batchnorm_weights(layer, module)
             elif isinstance(module, nn.Linear):
                 load_linear_weights(layer, module)
+            elif isinstance(module, LayerNorm2d):
+                load_layernorm2d_weights(layer, module)
             else:
                 print(f"Skipping {name}")
             break

@@ -21,8 +21,9 @@ class Blur2D(keras.layers.Layer):
                  kernel_size=2, 
                  stride=2, 
                  kernel_type="Rect", 
-                 padding="same",):
-        super(Blur2D, self).__init__()
+                 padding="same",
+                 **kwargs):
+        super(Blur2D, self).__init__(**kwargs)
 
         self.kernel_size = kernel_size
         if kernel_type == "Rect":
