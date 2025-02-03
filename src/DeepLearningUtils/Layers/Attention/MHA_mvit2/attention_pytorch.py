@@ -99,7 +99,10 @@ class MultiHeadAttention(nn.Module):
                  key_dim=128,
                  attention_drop_rate=0.0,
                  use_positional_embedding=True,
-                 use_key_positional_embedding=True):
+                 use_key_positional_embedding=True,
+                 use_query_embedding=True,
+                 use_key_embedding=True,
+                 use_value_embedding=True):
         super(MultiHeadAttention, self).__init__()
         self.heads: int = heads
         query_seq_len, query_height, query_width, query_channels = query_shape
@@ -115,13 +118,25 @@ class MultiHeadAttention(nn.Module):
         self.use_key_positional_embedding: bool = use_key_positional_embedding
         self.value_dim: int = value_dim
         self.key_dim: int = key_dim
+        self.use_query_embedding: bool = use_query_embedding
+        self.use_key_embedding: bool = use_key_embedding
+        self.use_value_embedding: bool = use_value_embedding
 
         d_model = self.value_dim
         units = d_model // self.heads
 
-        self.query_dense = nn.Linear(query_channels, d_model, bias=False)
-        self.key_dense = nn.Linear(key_channels, d_model, bias=False)
-        self.value_dense = nn.Linear(key_channels, d_model, bias=False)
+        if self.use_query_embedding:
+            self.query_dense = nn.Linear(query_channels, d_model, bias=False)
+        else:
+            self.query_dense = nn.Identity()
+        if self.use_key_embedding:
+            self.key_dense = nn.Linear(key_channels, d_model, bias=False)
+        else:
+            self.key_dense = nn.Identity()
+        if self.use_value_embedding:
+            self.value_dense = nn.Linear(key_channels, d_model, bias=False)
+        else:
+            self.value_dense = nn.Identity()
 
         self.attention = DotProductAttention(
             query_shape,

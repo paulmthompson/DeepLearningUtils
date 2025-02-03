@@ -152,6 +152,9 @@ class MultiHeadAttention(keras.layers.Layer):
                  use_key_positional_embedding=True,
                  use_linear_attention=False,
                  output_activation=None,
+                 query_embedding=True,
+                 key_embedding=True,
+                 value_embedding=True,
                  **kwargs):
         """
 
@@ -190,6 +193,9 @@ class MultiHeadAttention(keras.layers.Layer):
         self.key_dim: int = key_dim
         self.use_linear_attention: bool = use_linear_attention
         self.output_activation = output_activation
+        self.query_embedding: bool = query_embedding
+        self.key_embedding: bool = key_embedding
+        self.value_embedding: bool = value_embedding
 
     def build(self, query_shape, key_shape, value_shape, mask_shape=None):
         #query_shape, key_shape, value_shape = inputs_shape
@@ -199,28 +205,35 @@ class MultiHeadAttention(keras.layers.Layer):
         # Note: units can be anything, but this is what the paper does
         units = d_model // self.h
 
-        self.query_dense = keras.layers.Dense(
-            d_model,
-            activation=None,
-            use_bias=False,
-            name=f"query_dense")
-        self.query_dense.build(query_shape)
+        if self.query_embedding:
+            self.query_dense = keras.layers.Dense(
+                d_model,
+                activation=None,
+                use_bias=False,
+                name=f"query_dense")
+            self.query_dense.build(query_shape)
+        else:
+            self.query_dense = keras.layers.Activation("linear")
 
-        self.key = keras.layers.Dense(
-            d_model,
-            activation=None,
-            use_bias=False,
-            name=f"key_dense")
+        if self.key_embedding:
+            self.key = keras.layers.Dense(
+                d_model,
+                activation=None,
+                use_bias=False,
+                name=f"key_dense")
+            self.key.build(key_shape)
+        else:
+            self.key = keras.layers.Activation("linear")
 
-        self.key.build(key_shape)
-
-        self.value = keras.layers.Dense(
-            d_model,
-            activation=None,
-            use_bias=False,
-            name=f"value_dense")
-
-        self.value.build(value_shape)
+        if self.value_embedding:
+            self.value = keras.layers.Dense(
+                d_model,
+                activation=None,
+                use_bias=False,
+                name=f"value_dense")
+            self.value.build(value_shape)
+        else:
+            self.value = keras.layers.Activation("linear")
 
         self.att = DotProductAttention(
             query_shape=(self.query_seq_len, self.query_height, self.query_width),
