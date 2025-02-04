@@ -110,14 +110,13 @@ class EfficientViT_B(nn.Module):
 
         self.upsample_blocks = nn.ModuleList()
 
-
         feature_conv_input = out_channels[-1]
         for i in range(upsample_levels):
             # upsample bilinearly and concatenate with the previous feature map
 
             self.upsample_blocks.append(nn.Sequential(
                 torch.nn.UpsamplingBilinear2d(scale_factor=2)))
-            feature_conv_input += out_channels[-1]
+            feature_conv_input += out_channels[-(2 + i)]
 
         if output_filters > 0:
             self.features_conv = torch.nn.Conv2d(
@@ -207,8 +206,7 @@ class EfficientViT_B(nn.Module):
         return blocks
 
     def forward(self,
-                x: torch.Tensor,
-                intermediate_outputs: Optional[List[int]]=None):
+                x: torch.Tensor):
 
         assert x.dim() == 4, "Input tensor must be 4-dimensional"
 
@@ -234,16 +232,12 @@ class EfficientViT_B(nn.Module):
             x = self.features_bn(x)
             x = self.features_activation(x)
 
-        if intermediate_outputs is None:
-            return [x]
-        else:
-            outputs.append(x)
-            return outputs
+        return x
+
         
     def forward_intermediate(
             self,
-            x,
-            intermediate_outputs: Tuple[int, int, int]):
+            x):
 
         outputs: List[torch.Tensor] = []
 
@@ -253,10 +247,14 @@ class EfficientViT_B(nn.Module):
         x = self.stem_blur(x)
         x = self.stem_mb_conv(x)
         outputs.append(x)
+
         for i, block in enumerate(self.blocks):
             x = block(x)
-            if i in intermediate_outputs:
-                outputs.append(x)
+            outputs.append(x)
+
+        for i, upsample_block in enumerate(self.upsample_blocks):
+            x = upsample_block(x)
+            x = torch.cat([x, outputs[self.stack_output_indices[-(2 + i)]]], dim=1)
 
         if self.output_filters[0] > 0:
             x = self.features_conv(x)

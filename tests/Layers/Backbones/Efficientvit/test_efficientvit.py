@@ -30,20 +30,25 @@ def test_model_conversion(
     use_norm = True
     block_types = ["conv", "conv", "transform", "transform"]
     upsample_levels = 1
+    anti_aliasing = True
 
     keras_model = KerasEfficientViT(
         block_types=block_types,
+        input_shape=(256, 256, 3),
         use_norm=use_norm,
-        upsample_levels=upsample_levels
+        upsample_levels=upsample_levels,
+        anti_aliasing=anti_aliasing
     ).to(device)
 
     pytorch_model = PyTorchEfficientViT(
         block_types=block_types,
+        input_shape=(3, 256, 256),
         use_norm=use_norm,
-        upsample_levels=upsample_levels
+        upsample_levels=upsample_levels,
+        anti_aliasing=anti_aliasing
     ).to(device)
     # Generate random input data
-    input_data = np.random.rand(1, 224, 224, 3).astype(np.float32)
+    input_data = np.random.rand(3, 256, 256, 3).astype(np.float32)
     input_tensor = torch.tensor(input_data).permute(0, 3, 1, 2).to(device)  # Convert to PyTorch format
 
     # Get Keras model output
@@ -55,14 +60,14 @@ def test_model_conversion(
     # Get PyTorch model output
     # Put in eval mode
     pytorch_model.eval()
-    pytorch_output = pytorch_model(input_tensor)[0].cpu().detach().numpy().transpose(0, 2, 3, 1)
+    pytorch_output = pytorch_model(input_tensor).cpu().detach().numpy().transpose(0, 2, 3, 1)
 
     # Compare outputs
     np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-5)
 
     # Create JIT compiled PyTorch model
     pytorch_model_jit = torch.jit.script(pytorch_model)
-    pytorch_jit_result = pytorch_model_jit(input_tensor)[0].detach().numpy().transpose(0, 2, 3, 1)
+    pytorch_jit_result = pytorch_model_jit(input_tensor).detach().numpy().transpose(0, 2, 3, 1)
 
     # Compare JIT results
     np.testing.assert_allclose(pytorch_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)

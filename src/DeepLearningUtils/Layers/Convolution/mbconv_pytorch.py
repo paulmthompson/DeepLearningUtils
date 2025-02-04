@@ -73,7 +73,7 @@ class MBConv(nn.Module):
                         bias=True,
                         ))
                 self.expand_block.add_module(
-                    Blur2D(
+                    name + "expand_conv_blur", Blur2D(
                         kernel_size=5,
                         stride=strides,
                         padding='same'
@@ -124,7 +124,10 @@ class MBConv(nn.Module):
                         padding="same"
                         ))
                 self.dw_block.add_module(
-                    Blur2D(kernel_size=3, stride=strides, padding='same'))
+                    name + "dw_conv_blur", Blur2D(
+                        kernel_size=3,
+                        stride=strides,
+                        padding='same'))
             else:
                 self.dw_block.add_module(
                     name + "dw_conv", Conv2dSame(
