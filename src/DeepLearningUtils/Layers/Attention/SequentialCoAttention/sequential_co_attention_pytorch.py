@@ -53,11 +53,11 @@ class CoAttentionModule(nn.Module):
 
         attention_results = []
         att_input = query_sequence
-        for i, memory_frame in enumerate(memory_bank_frames):
-            key = self.key_dense(memory_frame)
-            value = self.value_dense(memory_frame)
-            att_input = self.query_norms[i](att_input)
-            att_input = self.query_denses[i](att_input)
+        for i, (query_norm, query_dense) in enumerate(zip(self.query_norms, self.query_denses)):
+            key = self.key_dense(memory_bank_frames[i])
+            value = self.value_dense(memory_bank_frames[i])
+            att_input = query_norm(att_input)
+            att_input = query_dense(att_input)
             attention_result = self.memory_attention_module(att_input, key, value, mask[:, i:i+1])
             attention_result *= mask[:, i:i+1, None, None, None]
             attention_result = attention_result + att_input

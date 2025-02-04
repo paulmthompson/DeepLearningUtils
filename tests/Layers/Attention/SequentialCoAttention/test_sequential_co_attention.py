@@ -112,3 +112,9 @@ def test_coattention_module(input_shape, n_frames, key_dim, value_dim):
 
     # Compare outputs
     np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-5)
+
+    # Test JIT
+    pytorch_model_jit = torch.jit.script(pytorch_coattention)
+    pytorch_jit_result = pytorch_model_jit(pytorch_input, pytorch_memory_bank, pytorch_mask).detach().numpy()
+
+    np.testing.assert_allclose(keras_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)
