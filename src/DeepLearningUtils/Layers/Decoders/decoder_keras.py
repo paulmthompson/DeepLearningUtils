@@ -1,0 +1,55 @@
+import keras
+
+
+class UNetDecoder(keras.layers.Layer):
+    def __init__(self,
+                 filter_sizes,
+                 activation='relu', **kwargs):
+        super(UNetDecoder, self).__init__(**kwargs)
+        self.filter_sizes = filter_sizes
+        self.activation = activation
+        self.conv_layers = []
+        self.bn_layers = []
+        self.activation_layers = []
+        self.upsample_layers = []
+        self.concat_layers = []
+
+        for i, filters in enumerate(filter_sizes):
+            self.conv_layers.append(keras.layers.Conv2D(
+                filters,
+                (3, 3),
+                padding='same',
+                name=f'conv_layers_{i}'))
+            self.bn_layers.append(keras.layers.BatchNormalization(
+                momentum=0.9,
+                name=f'bn_layers_{i}'))
+            self.activation_layers.append(keras.layers.Activation(
+                activation,
+                name=f'activation_layers_{i}'))
+            self.upsample_layers.append(keras.layers.UpSampling2D(
+                size=(2, 2),
+                interpolation='bilinear',
+                name=f'upsample_layers_{i}'))
+            self.concat_layers.append(keras.layers.Concatenate(name=f'concat_{i}'))
+
+        self.output_conv = keras.layers.Conv2D(
+            1,
+            (1, 1),
+            activation='sigmoid',
+            name='output_conv',
+            bias_initializer=keras.initializers.Constant(-5.0))
+
+    def call(self, inputs):
+        x = inputs[0]
+        encoder_outputs = inputs[1:]
+
+        for i in range(len(self.filter_sizes)):
+            x = self.upsample_layers[i](x)
+            x = self.concat_layers[i]([x, encoder_outputs[i]])
+            x = self.conv_layers[i](x)
+            x = self.bn_layers[i](x)
+            x = self.activation_layers[i](x)
+
+        x = self.output_conv(x)
+
+        return x

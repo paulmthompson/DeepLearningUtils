@@ -126,3 +126,62 @@ def load_keras_weights_to_pytorch_by_name(keras_model, pytorch_model, custom_loa
 
     for layer in keras_model.layers:
         load_keras_layer_weights(layer, pytorch_model, custom_loaders)
+
+
+def load_keras_into_pytorch(
+        keras_layer,
+        pytorch_module,
+        pytorch_name_formatting_fn=None,
+):
+    weights_by_layer = get_keras_weights_by_name(keras_layer)
+
+    for keras_name, weights in weights_by_layer.items():
+
+        print("Checking for", keras_name)
+
+        for pytorch_name, module in pytorch_module.named_modules():
+
+            # For the pytorch name, replace last . with _
+            # pytorch_name = pytorch_name.replace(".", "_")
+            if pytorch_name_formatting_fn is not None:
+                pytorch_name = pytorch_name_formatting_fn(pytorch_name)
+            if keras_name == pytorch_name:
+                name = keras_name
+                print(f"Loading {name}")
+
+                if isinstance(module, nn.Conv2d):
+                    weight = weights[0]
+                    if module.groups == module.in_channels and module.groups > 1:
+                        # Depthwise convolution
+                        module.weight.data = torch.tensor(weight).permute(2, 3, 0, 1).contiguous()
+                    else:
+                        # Standard convolution
+                        module.weight.data = torch.tensor(weight).permute(3, 2, 0, 1).contiguous()
+
+                    if module.bias is not None:
+                        bias = weights[1]
+                        module.bias.data = torch.tensor(bias)
+                    else:
+                        print(f"Skipping bias for {name}")
+
+                elif isinstance(module, nn.BatchNorm2d):
+                    module.weight.data = torch.tensor(weights[0])
+                    module.bias.data = torch.tensor(weights[1])
+                    module.running_mean = torch.tensor(weights[2])
+                    module.running_var = torch.tensor(weights[3])
+                elif isinstance(module, nn.Linear):
+
+                    module.weight.data = torch.tensor(weights[0]).t().contiguous()
+                    if module.bias is not None:
+                        bias = weights[1]
+                        module.bias.data = torch.tensor(bias)
+                    else:
+                        print(f"Skipping bias for {name}")
+
+                elif isinstance(module, nn.LayerNorm):
+                    module.weight.data = torch.tensor(weights[0])
+                    module.bias.data = torch.tensor(weights[1])
+
+                else:
+                    print(f"Skipping {name}")
+                    # print(module)
