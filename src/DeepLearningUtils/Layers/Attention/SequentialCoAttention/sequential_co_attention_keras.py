@@ -8,7 +8,7 @@ class CoAttentionModule(keras.layers.Layer):
                  memory_attention_module,
                  **kwargs):
         super(CoAttentionModule, self).__init__(**kwargs)
-        self.memory_attention_modules = memory_attention_module
+        self.memory_attention_module = memory_attention_module
 
     def build(self, input_shape):
         query_sequence, memory_bank_sequence, mask = input_shape
@@ -91,7 +91,7 @@ class CoAttentionModule(keras.layers.Layer):
             value = self.value_dense(memory_frame)
             att_input = self.query_norms[i](att_input)
             att_input = self.query_denses[i](att_input)
-            attention_result = self.memory_attention_modules(
+            attention_result = self.memory_attention_module(
                 [att_input, key, value, mask[:, i: i +1]])
             attention_result *= mask[:, i: i + 1, None, None, None]
             attention_result = attention_result + att_input

@@ -14,43 +14,8 @@ from src.DeepLearningUtils.Layers.Attention.SequentialCoAttention.sequential_co_
 
 from src.DeepLearningUtils.Layers.Attention.SequentialCoAttention.sequential_co_attention_pytorch import CoMemoryAttentionModule as CoMemoryAttentionModule_PyTorch
 from src.DeepLearningUtils.Layers.Attention.SequentialCoAttention.sequential_co_attention_pytorch import CoAttentionModule as CoAttentionModule_PyTorch
-from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name, \
-    load_layer_norm_weights, load_linear_weights
+from src.DeepLearningUtils.Layers.Attention.SequentialCoAttention.sequential_co_attention_pytorch import load_coattention_weights
 
-from src.DeepLearningUtils.Layers.Attention.MHA_mvit2.attention_pytorch import load_mha_positional_layer_weights
-
-
-
-def load_coattention_module_weights(keras_coattention_module, pytorch_coattention_module):
-    # Load weights from Keras to PyTorch
-   # Load query_norm
-    if keras_coattention_module.use_norm:
-        pytorch_coattention_module.query_norm.weight.data = keras_coattention_module.query_norm.get_weights()[0]
-        pytorch_coattention_module.query_norm.bias.data = keras_coattention_module.query_norm.get_weights()[1]
-    # load memory norm
-    if keras_coattention_module.use_norm:
-        pytorch_coattention_module.memory_norm.weight.data = keras_coattention_module.memory_norm.get_weights()[0]
-        pytorch_coattention_module.memory_norm.bias.data = keras_coattention_module.memory_norm.get_weights()[1]
-
-    #Load attention
-    load_mha_positional_layer_weights(keras_coattention_module.att, pytorch_coattention_module.att)
-
-def load_coattention_weights(keras_coattention, pytorch_coattention):
-
-    load_layer_norm_weights(keras_coattention.layer_norm1, pytorch_coattention.layer_norm1)
-    for i in range(len(keras_coattention.query_norms)):
-
-        load_layer_norm_weights(keras_coattention.query_norms[i], pytorch_coattention.query_norms[i])
-        load_linear_weights(keras_coattention.query_denses[i], pytorch_coattention.query_denses[i])
-
-    load_linear_weights(keras_coattention.key_dense, pytorch_coattention.key_dense)
-    load_linear_weights(keras_coattention.value_dense, pytorch_coattention.value_dense)
-    load_linear_weights(keras_coattention.out_dense, pytorch_coattention.out_dense)
-
-    load_layer_norm_weights(keras_coattention.layer_norm2, pytorch_coattention.layer_norm2)
-
-    load_linear_weights(keras_coattention.mlp1, pytorch_coattention.mlp1)
-    load_linear_weights(keras_coattention.mlp2, pytorch_coattention.mlp2)
 
 
 @pytest.mark.parametrize("input_shape, n_frames, key_dim, value_dim", [
@@ -99,7 +64,6 @@ def test_coattention_module(input_shape, n_frames, key_dim, value_dim):
     )
 
     # Load weights from Keras to PyTorch
-    load_coattention_module_weights(keras_coattention.memory_attention_modules, pytorch_coattention.memory_attention_module)
     load_coattention_weights(keras_coattention, pytorch_coattention)
 
     # Convert inputs to PyTorch tensors
