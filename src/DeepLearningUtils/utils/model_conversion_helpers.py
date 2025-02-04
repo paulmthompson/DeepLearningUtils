@@ -59,6 +59,14 @@ def load_batchnorm_weights(keras_layer, pytorch_module):
     else:
         print(f"Skipping non-BatchNorm2d layer {keras_layer.name}")
 
+def load_layer_norm_weights(keras_layer_norm, pytorch_layer_norm):
+    if isinstance(pytorch_layer_norm, nn.LayerNorm):
+        pytorch_layer_norm.weight.data = torch.tensor(keras_layer_norm.get_weights()[0])
+        pytorch_layer_norm.bias.data = torch.tensor(keras_layer_norm.get_weights()[1])
+    else:
+        print(f"Skipping non-LayerNorm layer {keras_layer_norm.name}")
+
+
 def load_layernorm2d_weights(keras_layer, pytorch_module):
     if isinstance(pytorch_module, LayerNorm2d):
         print("Loading LayerNorm2d weights for", keras_layer.name)

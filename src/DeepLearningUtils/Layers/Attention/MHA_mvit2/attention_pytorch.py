@@ -321,36 +321,22 @@ class MemoryAttentionModule(nn.Module):
         return att_out
 
 
-def create_encoder_memory_mask(
-        mask,
-        encoder_seq_length: int,
-        key_seq_length: int,
-        seq_len: int,
-        num_heads: int) -> torch.Tensor:
-    # Assuming mask is a tensor of shape [batch_size, seq_len]
-    mask = mask.unsqueeze(1).unsqueeze(-1)  # [batch_size, 1,  seq_len, 1]
-    mask = torch.tile(mask, [1, encoder_seq_length, 1,
-                             key_seq_length // seq_len])  # [batch_size, encoder_seq_length, seq_len]
-    mask = mask.view(mask.shape[0], encoder_seq_length,
-                     key_seq_length)  # [batch_size, encoder_seq_length, key_seq_length]
-
-    mask = mask.unsqueeze(1)  # [batch_size, 1,  encoder_seq_length, key_seq_length]
-    mask = torch.tile(mask, [1, num_heads, 1, 1])  # [batch_size, num_heads, encoder_seq_length, key_seq_length]
-    return mask
-
 
 def load_mha_positional_layer_weights(keras_layer, pytorch_module):
 
     print(f"Loading custom layer weights for {keras_layer.name}")
 
     # Load query weights
-    pytorch_module.query_dense.weight.data = torch.tensor(keras_layer.query_dense.get_weights()[0].T)
+    if keras_layer.query_embedding:
+        pytorch_module.query_dense.weight.data = torch.tensor(keras_layer.query_dense.get_weights()[0].T)
 
     # Load key weights
-    pytorch_module.key_dense.weight.data = torch.tensor(keras_layer.key.get_weights()[0].T)
+    if keras_layer.key_embedding:
+        pytorch_module.key_dense.weight.data = torch.tensor(keras_layer.key.get_weights()[0].T)
 
     # Load value weights
-    pytorch_module.value_dense.weight.data = torch.tensor(keras_layer.value.get_weights()[0].T)
+    if keras_layer.value_embedding:
+        pytorch_module.value_dense.weight.data = torch.tensor(keras_layer.value.get_weights()[0].T)
 
     #Load positional embedding weights
     if keras_layer.use_positional_embedding:
