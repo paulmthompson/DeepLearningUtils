@@ -1,4 +1,127 @@
 import keras
+from typing import Tuple, List, Optional
+
+
+def image_pooling(
+        input: keras.KerasTensor,
+        sequence=False,
+        pooling_operation=keras.layers.Activation('linear'),
+) -> keras.KerasTensor:
+    """
+
+    Given an image (H x W x C), or a sequence of images (T x H x W x C),
+    applies a pooling operation. This is useful if you want to reduce the
+    spatial dimensions of the input tensor before applying an attention mechanism.
+
+    Parameters
+    ----------
+    input : keras.KerasTensor
+        Input tensor.
+    sequence : bool
+        If True, the input tensor is assumed to be a sequence of frames.
+        In this case, the function applies TimeDistributed to the key and value
+    pooling_operation : keras.layers.Layer
+        Pooling operation to apply to the input tensor
+
+    Returns
+    -------
+    keras.KerasTensor:
+        embedded tensor
+    """
+
+    if sequence:
+
+        key = keras.layers.TimeDistributed(pooling_operation)(input)
+    else:
+        key = pooling_operation(input)
+
+    return key
+
+
+def create_memory_model(
+        base_memory_model: keras.Model,
+        mask_encoder_model: keras.Model,
+        efficientvit_input_shape: Tuple[int, int, int],
+        SEQ_LEN: int,
+        base_memory_model_output_layer=None,
+        mask_encoder_output_layer=None,
+        pooling_operation=keras.layers.Activation('linear'),
+        combine_operation='add',
+        memory_encoder_activation=keras.layers.Activation('tanh'),
+) -> keras.Model:
+    """
+
+    Dense layer synthesis
+    Layer Norm
+    (Optional) pooling operation
+
+    Parameters
+    ----------
+    base_memory_model : Model
+        Base model for memory encoder
+    mask_encoder_model: Model
+        Mask encoder model
+    efficientvit_input_shape : tuple
+        Input shape for the efficientvit model
+    SEQ_LEN : int
+        Sequence length
+    base_memory_model_output_layer : str
+        Name of the output layer of the base memory model
+    mask_encoder_output_layer : str
+        Name of the output layer of the mask encoder model
+    pooling_operation : keras.layers.Layer
+        Pooling operation to apply to the input tensor
+    combine_operation : str
+        Operation to combine the memory and mask encoder outputs
+    memory_encoder_activation : keras.layers.Layer
+        Activation function to apply to the memory encoder output
+
+    Returns
+    -------
+    keras.Model:
+        Memory model
+    """
+
+    height, width, channels = efficientvit_input_shape
+
+    memory_inputs = keras.Input(
+        shape=(SEQ_LEN, height, width, channels),
+        name="memory_inputs"
+    )
+    memory_labels = keras.Input(
+        shape=(SEQ_LEN, height, width, 1),
+        name="memory_labels"
+    )
+
+    memory_encoder_layer = MemoryEncoderLayer(
+        base_memory_model,
+        mask_encoder_model,
+        height,
+        width,
+        channels,
+        base_memory_model_output_layer=base_memory_model_output_layer,
+        mask_encoder_output_layer=mask_encoder_output_layer,
+        activation=memory_encoder_activation,
+        combine_operation=combine_operation
+    )
+
+    memory_encoder_out = memory_encoder_layer([memory_inputs, memory_labels])
+
+    memory_encoder_pooled = image_pooling(
+        memory_encoder_out,
+        sequence=True,
+        pooling_operation=pooling_operation)
+
+    if base_memory_model_output_layer is None:
+        model_name = "memory_model"
+    else:
+        model_name = f"memory_model_{base_memory_model_output_layer}"
+
+    model = keras.Model(
+        inputs=[memory_inputs, memory_labels],
+        outputs=memory_encoder_pooled,
+        name=model_name)
+    return model
 
 
 class MemoryEncoderLayer(keras.layers.Layer):
@@ -53,6 +176,10 @@ class MemoryEncoderLayer(keras.layers.Layer):
         self.channels = channels
         self.combine_operation = combine_operation
         self.activation = activation
+
+        # Check combine operation
+        if combine_operation not in ['add', 'dense', 'conv']:
+            raise ValueError(f"Combine operation {combine_operation} not supported")
 
         # Create the memory model
         self.memory_model = MemoryModelBase(

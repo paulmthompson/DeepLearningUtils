@@ -7,9 +7,9 @@ from typing import Tuple, List, Optional
 
 class MemoryModelBase(nn.Module):
     def __init__(self,
-                 base_model,
-                 mask_encoder,
-                 input_shape,
+                 base_model: nn.Module,
+                 mask_encoder: nn.Module,
+                 input_shape: Tuple[int, int, int],
                  combine_operation='add',
                  activation=nn.Tanh(),
                  ):

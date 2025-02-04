@@ -93,3 +93,10 @@ def test_memory_encoder(input_shape, output_channels, seq_len, anti_aliasing, co
 
     # Compare outputs
     np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-3)
+
+    # Create JIT compiled PyTorch model
+    pytorch_model_jit = torch.jit.script(pytorch_memory_encoder)
+    pytorch_jit_result = pytorch_model_jit(pytorch_input, pytorch_mask_input,pytorch_mask).detach().numpy()
+
+    # Compare outputs
+    np.testing.assert_allclose(pytorch_output, pytorch_jit_result, rtol=1e-5, atol=1e-3)
