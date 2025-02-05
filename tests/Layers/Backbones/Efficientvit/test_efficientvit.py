@@ -27,21 +27,29 @@ def test_model_conversion(
     device = torch.device('cpu')
 
     #block_types=["conv", "conv", "conv", "conv"]
+    stem_width = 16
     use_norm = True
     block_types = ["conv", "conv", "transform", "transform"]
     upsample_levels = 1
     anti_aliasing = True
+    output_filters = 256
 
     keras_model = KerasEfficientViT(
         block_types=block_types,
+        stem_width=stem_width,
+        output_filters=output_filters,
         input_shape=(256, 256, 3),
         use_norm=use_norm,
         upsample_levels=upsample_levels,
         anti_aliasing=anti_aliasing
     ).to(device)
 
+    #keras_model.load_weights("/mnt/c/Users/wanglab/Desktop/efficientvit_memory7_aa4.weights.h5")
+
     pytorch_model = PyTorchEfficientViT(
         block_types=block_types,
+        stem_width=stem_width,
+        output_filters=output_filters,
         input_shape=(3, 256, 256),
         use_norm=use_norm,
         upsample_levels=upsample_levels,

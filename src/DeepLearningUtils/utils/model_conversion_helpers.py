@@ -55,7 +55,9 @@ def load_batchnorm_weights(keras_layer, pytorch_module):
         pytorch_module.weight.data = torch.tensor(weights[0])
         pytorch_module.bias.data = torch.tensor(weights[1])
         pytorch_module.running_mean = torch.tensor(weights[2])
-        pytorch_module.running_var = torch.tensor(weights[3])
+        # KERAS USES STD AND PYTORCH USES VAR: AHHHHHHHH
+        pytorch_module.running_var = torch.tensor(weights[3] * weights[3])
+
     else:
         print(f"Skipping non-BatchNorm2d layer {keras_layer.name}")
 
@@ -168,7 +170,8 @@ def load_keras_into_pytorch(
                     module.weight.data = torch.tensor(weights[0])
                     module.bias.data = torch.tensor(weights[1])
                     module.running_mean = torch.tensor(weights[2])
-                    module.running_var = torch.tensor(weights[3])
+                    # KERAS USES STD AND PYTORCH USES VAR: AHHHHHHHH
+                    module.running_var = torch.tensor(weights[3] * weights[3])
                 elif isinstance(module, nn.Linear):
 
                     module.weight.data = torch.tensor(weights[0]).t().contiguous()
