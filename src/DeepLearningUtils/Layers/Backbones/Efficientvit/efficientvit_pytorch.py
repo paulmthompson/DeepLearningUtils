@@ -263,10 +263,13 @@ class EfficientViT_B(nn.Module):
             x = upsample_block(x)
             x = torch.cat([x, outputs[self.stack_output_indices[-(2 + i)]]], dim=1)
 
-        if self.output_filters[0] > 0:
+        if self.output_filters > 0:
             x = self.features_conv(x)
             x = self.features_bn(x)
             x = self.features_activation(x)
 
         outputs.append(x)
-        return (outputs[0], outputs[1], outputs[2], outputs[3], outputs[4])
+        return (outputs[0],
+                outputs[self.stack_output_indices[1]],
+                outputs[self.stack_output_indices[2]],
+                outputs[-1])

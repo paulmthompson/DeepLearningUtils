@@ -34,7 +34,11 @@ def create_mask_encoder(
             strides=(1, 1),
             padding='same',
             name="conv1")(inputs)  # (b, 128, 128, 4)
-        x = Blur2D(5, 2, "Binomial", padding="same", name="blur1")(x)
+        x = Blur2D(5,
+                   2,
+                   "Binomial",
+                   padding="same",
+                   name="blur1")(x)
     else:
         x = keras.layers.Conv2D(
             4,
@@ -53,8 +57,14 @@ def create_mask_encoder(
             strides=(1, 1),
             padding='same',
             name="conv2")(x)
-        x = Blur2D(3, 2, "Triangle", padding="same")(x)  # (b, 64, 64, 64)
-        x = Blur2D(3, 2, "Triangle", padding="same")(x)  # (b, 32, 32, 64)
+        x = Blur2D(3,
+                   2,
+                   "Triangle",
+                   padding="same")(x)  # (b, 64, 64, 64)
+        x = Blur2D(3,
+                   2,
+                   "Triangle",
+                   padding="same")(x)  # (b, 32, 32, 64)
     else:
         x = keras.layers.Conv2D(
             64,

@@ -1,6 +1,4 @@
 import os
-
-import os
 os.environ["KERAS_BACKEND"] = "torch"
 
 import numpy as np
@@ -24,14 +22,10 @@ def create_and_save_models(
     input_shape = (256, 256, 3)
     use_norm = True
     upsample_levels = 1
-    #upsample_levels = 0
     block_types = ["conv", "conv", "transform", "transform"]
-    #block_types = ["conv"]
     anti_aliasing = True
     num_blocks = [2, 2, 3, 3]
     out_channels = [16, 32, 64, 128]
-    #num_blocks = [2]
-    #out_channels = [2]
     stem_width = 16
     expansions = 4
     is_fused = False
@@ -122,7 +116,6 @@ if __name__ == "__main__":
     create_and_save_models(
         device_type='cpu',
         keras_weights_path="/mnt/c/Users/wanglab/Desktop/efficientvit_memory7_aa4.weights.h5",
-        #keras_weights_path="/mnt/c/Users/wanglab/Documents/efficientvit_aa_test.weights.h5",
         save_path='pytorch_model_jit.pth',
         test_input_data_path="/mnt/e/Deep_Learning/Whisker_HighSNR/0110_1/images/img0000000.png"
     )
