@@ -44,7 +44,7 @@ def mb_conv(
     initializer=None,
     drop_rate=0,
     anti_aliasing=False,
-    activation="keras.activations.hard_silu",
+    activation="keras.activations.hard_swish",
     name=""
 ):
 
@@ -77,7 +77,9 @@ def mb_conv(
                 name=name and name + "expand_conv")(inputs)
 
         if use_norm:
-            nn = keras.layers.BatchNormalization(momentum=0.9, name=name + "expand_bn")(nn) 
+            nn = keras.layers.BatchNormalization(
+                momentum=0.9,
+                name=name + "expand_bn")(nn)
         nn = keras.layers.Activation(activation_func, name='{}_activation'.format(name))(nn)
     elif expansion > 1:
         nn = keras.layers.Conv2D(
@@ -88,7 +90,9 @@ def mb_conv(
             kernel_initializer=initializer,
             name=name + "expand_conv")(inputs)
         if use_norm:
-            nn = keras.layers.BatchNormalization(momentum=0.9, name=name + "expand_bn")(nn)
+            nn = keras.layers.BatchNormalization(
+                momentum=0.9,
+                name=name + "expand_bn")(nn)
         nn = keras.layers.Activation(activation_func, name='{}_activation'.format(name))(nn)
     else:
         nn = inputs
@@ -116,7 +120,9 @@ def mb_conv(
                 depthwise_initializer=initializer,
                 name=name + "dw_conv")(nn)
         if use_norm:
-            nn = keras.layers.BatchNormalization(momentum=0.9, name=name + "dw_bn")(nn)
+            nn = keras.layers.BatchNormalization(
+                momentum=0.9,
+                name=name + "dw_bn")(nn)
         nn = keras.layers.Activation(activation_func, name='{}_dw_activation'.format(name))(nn)
 
     pw_kernel_size = 3 if is_fused and expansion == 1 else 1
@@ -131,10 +137,14 @@ def mb_conv(
         name=name + "pw_conv")(nn)
     
     if use_output_norm and shortcut:
-        nn = keras.layers.BatchNormalization(momentum=0.9, gamma_initializer="zeros", name=name + "pw_bn")(nn)
+        nn = keras.layers.BatchNormalization(momentum=0.9,
+                                             gamma_initializer="zeros",
+                                             name=name + "pw_bn")(nn)
         #nn = keras.layers.BatchNormalization(momentum=0.9, name=name + "pw_bn")(nn)
     elif use_output_norm:
-        nn = keras.layers.BatchNormalization(momentum=0.9, name=name + "pw_bn")(nn)
+        nn = keras.layers.BatchNormalization(
+            momentum=0.9,
+            name=name + "pw_bn")(nn)
     nn = keras.layers.Dropout(rate=drop_rate, name=name + "dropout")(nn)
 
     return keras.layers.Add(name=name + "output")([inputs, nn]) if shortcut else keras.layers.Activation("linear", name=name + "output")(nn)

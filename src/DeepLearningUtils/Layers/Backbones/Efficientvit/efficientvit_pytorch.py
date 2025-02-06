@@ -82,7 +82,11 @@ class EfficientViT_B(nn.Module):
                 stride=(1, 1))
             self.stem_bn = nn.BatchNorm2d(stem_width, eps=1e-3) if use_norm else nn.Identity()
             self.stem_activation = activation
-            self.stem_blur = Blur2D(kernel_size=5, stride=2, kernel_type="Binomial", padding='same')
+            self.stem_blur = Blur2D(
+                kernel_size=5,
+                stride=2,
+                kernel_type="Binomial",
+                padding='same')
         else:
             self.stem_conv = Conv2dSame(
                 input_channels,
@@ -115,7 +119,10 @@ class EfficientViT_B(nn.Module):
             # upsample bilinearly and concatenate with the previous feature map
 
             self.upsample_blocks.append(nn.Sequential(
-                torch.nn.UpsamplingBilinear2d(scale_factor=2)))
+                torch.nn.Upsample(
+                    scale_factor=2,
+                    mode='bilinear',
+                    align_corners=False)))
             feature_conv_input += out_channels[-(2 + i)]
 
         if output_filters > 0:
@@ -125,7 +132,7 @@ class EfficientViT_B(nn.Module):
                 kernel_size=(1, 1),
                 stride=(1, 1))
             use_feature_norm = use_norm and use_features_activation
-            self.features_bn = nn.BatchNorm2d(output_filters,eps=1e-3) if use_feature_norm else nn.Identity()
+            self.features_bn = nn.BatchNorm2d(output_filters, eps=1e-3) if use_feature_norm else nn.Identity()
             self.features_activation = activation if use_features_activation else nn.Identity()
 
     def _make_blocks(self, block_input_channels):

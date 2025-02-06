@@ -102,5 +102,7 @@ def lite_mhsa(inputs,
         kernel_initializer=initializer,
         name=name and name + "out_conv")(output)
     if use_norm:
-        output = keras.layers.BatchNormalization(momentum=0.9, name=name and name + "out_bn")(output)
+        output = keras.layers.BatchNormalization(
+            momentum=0.9,
+            name=name and name + "out_bn")(output)
     return output

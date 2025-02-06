@@ -75,6 +75,7 @@ class MBConv(nn.Module):
                 self.expand_block.add_module(
                     name + "expand_conv_blur", Blur2D(
                         kernel_size=5,
+                        kernel_type="Binomial",
                         stride=strides,
                         padding='same'
                         ))
@@ -91,7 +92,7 @@ class MBConv(nn.Module):
             conv_output_channels = int(input_channel * expansion)
             if use_norm:
                 self.expand_block.add_module(
-                    name + "expand_bn", nn.BatchNorm2d(conv_output_channels,eps=1e-3))
+                    name + "expand_bn", nn.BatchNorm2d(conv_output_channels, eps=1e-3))
             self.expand_block.add_module(f"{name}_activation", activation)
         elif expansion > 1:
             self.expand_block.add_module(
@@ -104,7 +105,7 @@ class MBConv(nn.Module):
                     ))
             if use_norm:
                 self.expand_block.add_module(
-                name + "expand_bn", nn.BatchNorm2d(int(input_channel * expansion),eps=1e-3))
+                name + "expand_bn", nn.BatchNorm2d(int(input_channel * expansion), eps=1e-3))
             self.expand_block.add_module(f"{name}_activation", activation)
 
             conv_output_channels = int(input_channel * expansion)
@@ -114,19 +115,20 @@ class MBConv(nn.Module):
         if not is_fused:
             if anti_aliasing and strides > 1:
                 self.dw_block.add_module(
-                    name + "dw_conv", torch.nn.Conv2d(
+                    name + "dw_conv", Conv2dSame(
                         conv_output_channels,
                         conv_output_channels,
                         kernel_size=(3, 3),
                         stride=(1, 1),
                         groups=conv_output_channels,
                         bias=True,
-                        padding="same"
+                        #padding="same"
                         ))
                 self.dw_block.add_module(
                     name + "dw_conv_blur", Blur2D(
-                        kernel_size=3,
+                        kernel_size=5,
                         stride=strides,
+                        kernel_type="Binomial",
                         padding='same'))
             else:
                 self.dw_block.add_module(
@@ -140,7 +142,7 @@ class MBConv(nn.Module):
                         ))
             if use_norm:
                 self.dw_block.add_module(
-                    name + "dw_bn", nn.BatchNorm2d(conv_output_channels,eps=1e-3))
+                    name + "dw_bn", nn.BatchNorm2d(conv_output_channels, eps=1e-3))
             self.dw_block.add_module(f"{name}_dw_activation", activation)
 
         pw_kernel_size = 3 if is_fused and expansion == 1 else 1
@@ -154,7 +156,7 @@ class MBConv(nn.Module):
                 ))
         if use_output_norm:
             self.pw_block.add_module(
-                name + "pw_bn", nn.BatchNorm2d(output_channel,eps=1e-3))
+                name + "pw_bn", nn.BatchNorm2d(output_channel, eps=1e-3))
         
         self.dropout = nn.Dropout(p=drop_rate)
 

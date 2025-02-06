@@ -61,7 +61,8 @@ def EfficientViT_B(
 
     #upsample levels should be value between 0 and len(num_blocks)
     if upsample_levels < 0 or upsample_levels >= len(num_blocks):
-        raise ValueError("upsample_levels should be value between 0 and len(num_blocks)")
+        if not upsample_levels == 0:
+            raise ValueError("upsample_levels should be value between 0 and len(num_blocks)")
 
     if len(num_blocks) != len(out_channels) or len(num_blocks) != len(block_types):
         raise ValueError("num_blocks, out_channels, block_types should have same length")
@@ -84,7 +85,8 @@ def EfficientViT_B(
             kernel_initializer=initializer,
             name="stem_conv")(inputs)
         if use_norm:
-            nn = keras.layers.BatchNormalization(momentum=0.9, name="stem_bn")(nn)
+            nn = keras.layers.BatchNormalization(momentum=0.9,
+                                                 name="stem_bn")(nn)
         nn = keras.layers.Activation(activation_func, name="stem_activation_")(nn)
         nn = Blur2D(kernel_size=5, stride=2, kernel_type="Binomial", padding='same')(nn)
     else:
@@ -150,6 +152,7 @@ def EfficientViT_B(
                     use_bias=block_use_bias,
                     use_norm=block_use_norm,
                     use_output_norm=use_norm,
+                    #use_output_norm=False,
                     drop_rate=block_drop_rate,
                     activation=activation,
                     initializer=initializer,
@@ -163,6 +166,7 @@ def EfficientViT_B(
                     key_dim=head_dimension,
                     sr_ratio=5,
                     use_norm=use_norm,
+                    #use_norm=False,
                     initializer=initializer,
                     name=name + "attn_")
 
@@ -178,6 +182,7 @@ def EfficientViT_B(
                     use_bias=block_use_bias,
                     use_norm=block_use_norm,
                     use_output_norm=use_norm,
+                    #use_output_norm=False,
                     drop_rate=block_drop_rate,
                     activation=activation,
                     initializer=initializer,
