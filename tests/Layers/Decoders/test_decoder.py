@@ -10,6 +10,8 @@ import torch
 from torch import nn
 import keras
 
+from tests.testing_utilities import assert_arrays_equal_with_nans
+
 from src.DeepLearningUtils.Layers.Decoders.decoder_keras import UNetDecoder as UNetDecoder_Keras
 from src.DeepLearningUtils.Layers.Decoders.decoder_pytorch import UNetDecoder as UNetDecoder_PyTorch
 
@@ -75,6 +77,7 @@ def test_unet_decoder(input_shape, filter_sizes):
 
     # Compare outputs
     np.testing.assert_allclose(keras_output_data, pytorch_output_data, rtol=1e-5, atol=1e-5)
+    assert_arrays_equal_with_nans(keras_output_data, pytorch_output_data, rtol=1e-5, atol=1e-5)
 
     # Create JIT compiled PyTorch model
     pytorch_unet_decoder_jit = torch.jit.script(pytorch_unet_decoder)
