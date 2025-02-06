@@ -6,6 +6,7 @@ import os
 os.environ["KERAS_BACKEND"] = "torch"
 
 import keras
+import numpy as np
 
 from src.DeepLearningUtils.Layers.LayerNorm2D.layernorm2d_pytorch import LayerNorm2d
 
@@ -51,12 +52,24 @@ def load_conv2d_weights(keras_layer, pytorch_module):
 def load_batchnorm_weights(keras_layer, pytorch_module):
     if isinstance(pytorch_module, nn.BatchNorm2d):
         print("Loading BatchNorm2d weights for", keras_layer.name)
+        if pytorch_module.training:
+            print("WARNING: BatchNorm2d layer is in training mode")
         weights = keras_layer.get_weights()
+        if (pytorch_module.weight.data.shape != torch.tensor(weights[0]).shape):
+            print(f"WARNING: Weight shapes do not match: {pytorch_module.weight.data.shape} != {torch.tensor(weights[0].shape)}")
         pytorch_module.weight.data = torch.tensor(weights[0])
+
+        if (pytorch_module.bias.data.shape != torch.tensor(weights[1]).shape):
+            print(f"WARNING: Bias shapes do not match: {pytorch_module.bias.data.shape} != {torch.tensor(weights[1].shape)}")
         pytorch_module.bias.data = torch.tensor(weights[1])
+
+        if (pytorch_module.running_mean.shape != torch.tensor(weights[2]).shape):
+            print(f"WARNING: Running mean shapes do not match: {pytorch_module.running_mean.shape} != {torch.tensor(weights[2].shape)}")
         pytorch_module.running_mean = torch.tensor(weights[2])
-        # KERAS USES STD AND PYTORCH USES VAR: AHHHHHHHH
-        pytorch_module.running_var = torch.tensor(weights[3] * weights[3])
+
+        if (pytorch_module.running_var.shape != torch.tensor(weights[3]).shape):
+            print(f"WARNING: Running var shapes do not match: {pytorch_module.running_var.shape} != {torch.tensor(weights[3].shape)}")
+        pytorch_module.running_var = torch.tensor(weights[3])
 
     else:
         print(f"Skipping non-BatchNorm2d layer {keras_layer.name}")
@@ -170,8 +183,8 @@ def load_keras_into_pytorch(
                     module.weight.data = torch.tensor(weights[0])
                     module.bias.data = torch.tensor(weights[1])
                     module.running_mean = torch.tensor(weights[2])
-                    # KERAS USES STD AND PYTORCH USES VAR: AHHHHHHHH
-                    module.running_var = torch.tensor(weights[3] * weights[3])
+                    module.running_var = torch.tensor(np.sqrt(weights[3]))
+
                 elif isinstance(module, nn.Linear):
 
                     module.weight.data = torch.tensor(weights[0]).t().contiguous()
