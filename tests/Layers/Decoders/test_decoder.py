@@ -17,16 +17,7 @@ from src.DeepLearningUtils.Layers.Decoders.decoder_pytorch import UNetDecoder as
 
 from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_into_pytorch
 
-def transform_layer_name(layer_name):
-    parts = layer_name.split('.')
-    if len(parts) < 3:
-        return layer_name
-    if parts[2] == 'conv':
-        return f"conv_layers_{parts[1]}"
-    elif parts[2] == 'bn':
-        return f"bn_layers_{parts[1]}"
-    else:
-        return layer_name
+from src.DeepLearningUtils.Layers.Decoders.decoder_pytorch import transform_layer_name
 
 
 @pytest.mark.parametrize("input_shape, filter_sizes", [

@@ -15,12 +15,9 @@ from src.DeepLearningUtils.Layers.Backbones.Mask_Encoder.mask_encoder_keras impo
 from src.DeepLearningUtils.Layers.Backbones.Mask_Encoder.mask_encoder_pytorch import MaskEncoder
 from src.DeepLearningUtils.Layers.Backbones.Memory_Encoder.memory_encoder_keras import MemoryEncoderLayer as MemoryEncoder_Keras
 from src.DeepLearningUtils.Layers.Backbones.Memory_Encoder.memory_encoder_pytorch import MemoryModelBase as MemoryEncoder_PyTorch
-from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
+from src.DeepLearningUtils.Layers.Backbones.Memory_Encoder.memory_encoder_pytorch import load_memory_encoder_weights
 
-def load_memory_encoder_weights(keras_model, pytorch_model):
-    # Load weights from Keras to PyTorch
-    load_keras_weights_to_pytorch_by_name(keras_model.base_memory_model, pytorch_model.base_model)
-    load_keras_weights_to_pytorch_by_name(keras_model.mask_encoder_model, pytorch_model.mask_encoder)
+
 
 @pytest.mark.parametrize("input_shape, output_channels, seq_len, anti_aliasing, combine_operation", [
     ((3, 256, 256), 256, 1, True, 'add'),

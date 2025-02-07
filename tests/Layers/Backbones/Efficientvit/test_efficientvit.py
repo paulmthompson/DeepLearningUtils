@@ -6,6 +6,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import torch
 import numpy as np
+
+import keras
 from src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_keras import EfficientViT_B as KerasEfficientViT
 from src.DeepLearningUtils.Layers.Backbones.Efficientvit.efficientvit_pytorch import EfficientViT_B as PyTorchEfficientViT
 from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
@@ -79,5 +81,29 @@ def test_model_conversion(
 
     # Compare JIT results
     np.testing.assert_allclose(pytorch_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)
+
+    encoder_backbone_outputs = []
+    for layer in [
+        "stem_MB_output",  # 128x128
+        "stack_1_block_2_output",  # 64x64
+        "stack_2_block_2_output",  # 32x32
+        "features_conv",
+    ]:
+        encoder_backbone_outputs.append(keras_model.get_layer(layer).output)
+
+    keras_model = keras.models.Model(
+        inputs=keras_model.input,
+        outputs=encoder_backbone_outputs,
+        name="efficientvit")
+
+    keras_output = keras_model.predict(input_data)
+
+    pytorch_output = pytorch_model.forward_intermediate(input_tensor)
+
+    # Compare outputs
+    for i in range(len(encoder_backbone_outputs)):
+        print(i)
+        np.testing.assert_allclose(keras_output[i], pytorch_output[i].cpu().detach().numpy().transpose(0, 2, 3, 1), rtol=1e-5, atol=1e-5)
+
 if __name__ == "__main__":
     pytest.main([__file__])
