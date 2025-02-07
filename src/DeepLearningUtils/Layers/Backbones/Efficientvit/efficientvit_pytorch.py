@@ -270,6 +270,6 @@ class EfficientViT_B(nn.Module):
 
         outputs.append(x)
         return (outputs[0],
+                outputs[self.stack_output_indices[0]],
                 outputs[self.stack_output_indices[1]],
-                outputs[self.stack_output_indices[2]],
                 outputs[-1])

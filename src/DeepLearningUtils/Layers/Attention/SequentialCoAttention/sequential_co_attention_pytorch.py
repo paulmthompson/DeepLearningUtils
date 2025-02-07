@@ -131,7 +131,7 @@ class CoMemoryAttentionModule(nn.Module):
 
     def forward(self, encoder_output, memory_key, memory_value, memory_mask):
 
-        assert len(encoder_output.shape) == 5
+        assert len(encoder_output.shape) == 5, f"Encoder output shape: {encoder_output.shape}"
         assert len(memory_key.shape) == 5
         assert len(memory_value.shape) == 5
 

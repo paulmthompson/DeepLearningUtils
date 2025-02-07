@@ -76,3 +76,18 @@ class UNetDecoderLevel(nn.Module):
         x = self.bn(x)
         x = self.activation(x)
         return x
+
+
+"""
+Used for loading weights
+"""
+def transform_layer_name(layer_name):
+    parts = layer_name.split('.')
+    if len(parts) < 3:
+        return layer_name
+    if parts[2] == 'conv':
+        return f"conv_layers_{parts[1]}"
+    elif parts[2] == 'bn':
+        return f"bn_layers_{parts[1]}"
+    else:
+        return layer_name

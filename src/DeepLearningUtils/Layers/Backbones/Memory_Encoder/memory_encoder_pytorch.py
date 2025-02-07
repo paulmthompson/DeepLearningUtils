@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from typing import Tuple, List, Optional
 
+from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
 
 class MemoryModelBase(nn.Module):
     def __init__(self,
@@ -58,7 +59,7 @@ class MemoryModelBase(nn.Module):
         assert images.shape[0] == label_masks.shape[0] == mask.shape[0]
         assert images.shape[1] == label_masks.shape[1] == mask.shape[1]
         assert len(images.shape) == 5
-        assert len(label_masks.shape) == 5
+        assert len(label_masks.shape) == 5, f"Label masks shape: {label_masks.shape}"
 
         # Apply the base model to the sequence of images
         base_model_outputs = []
@@ -86,3 +87,8 @@ class MemoryModelBase(nn.Module):
         synthesized_images = self.activation(combined_outputs)
 
         return synthesized_images
+
+def load_memory_encoder_weights(keras_model, pytorch_model):
+    # Load weights from Keras to PyTorch
+    load_keras_weights_to_pytorch_by_name(keras_model.base_memory_model, pytorch_model.base_model)
+    load_keras_weights_to_pytorch_by_name(keras_model.mask_encoder_model, pytorch_model.mask_encoder)
