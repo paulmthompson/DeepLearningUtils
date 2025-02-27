@@ -1,11 +1,14 @@
 import keras
 
+from src.DeepLearningUtils.Layers.Normalization.bn_keras import AccumBatchNormalization
+
 
 class UNetDecoder(keras.layers.Layer):
     def __init__(self,
                  filter_sizes,
                  activation='relu',
                  transpose=False,
+                 accum_steps=1,
                  **kwargs):
         super(UNetDecoder, self).__init__(**kwargs)
         self.filter_sizes = filter_sizes
@@ -22,9 +25,15 @@ class UNetDecoder(keras.layers.Layer):
                 (3, 3),
                 padding='same',
                 name=f'conv_layers_{i}'))
-            self.bn_layers.append(keras.layers.BatchNormalization(
-                momentum=0.9,
-                name=f'bn_layers_{i}'))
+            if accum_steps > 1:
+                self.bn_layers.append(AccumBatchNormalization(
+                    accum_steps=accum_steps,
+                    momentum=0.9,
+                    name=f'bn_layers_{i}'))
+            else:
+                self.bn_layers.append(keras.layers.BatchNormalization(
+                    momentum=0.9,
+                    name=f'bn_layers_{i}'))
             self.activation_layers.append(keras.layers.Activation(
                 activation,
                 name=f'activation_layers_{i}'))
