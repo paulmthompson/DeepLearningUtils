@@ -51,7 +51,7 @@ class Blur2D(keras.layers.Layer):
             self.kernel2d = keras.ops.expand_dims(
                 keras.ops.outer(kernel_base, kernel_base), axis=(2, 3)
             )
-            self.kernel2d = keras.ops.cast(self.kernel2d, "float32")
+            self.kernel2d = keras.ops.cast(self.kernel2d, keras.backend.floatx())
             self.kernel2d = keras.ops.divide(
                 self.kernel2d, keras.ops.sum(self.kernel2d)
             )
@@ -63,7 +63,7 @@ class Blur2D(keras.layers.Layer):
             self.kernel2d = keras.ops.expand_dims(
                 keras.ops.outer(kernel, kernel), axis=(2, 3)
             )
-            self.kernel2d = keras.ops.cast(self.kernel2d, "float32")
+            self.kernel2d = keras.ops.cast(self.kernel2d, keras.backend.floatx())
             self.kernel2d = keras.ops.divide(
                 self.kernel2d, keras.ops.sum(self.kernel2d)
             )

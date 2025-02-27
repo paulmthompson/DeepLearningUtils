@@ -4,7 +4,9 @@ import keras
 class UNetDecoder(keras.layers.Layer):
     def __init__(self,
                  filter_sizes,
-                 activation='relu', **kwargs):
+                 activation='relu',
+                 transpose=False,
+                 **kwargs):
         super(UNetDecoder, self).__init__(**kwargs)
         self.filter_sizes = filter_sizes
         self.activation = activation
@@ -26,10 +28,18 @@ class UNetDecoder(keras.layers.Layer):
             self.activation_layers.append(keras.layers.Activation(
                 activation,
                 name=f'activation_layers_{i}'))
-            self.upsample_layers.append(keras.layers.UpSampling2D(
-                size=(2, 2),
-                interpolation='bilinear',
-                name=f'upsample_layers_{i}'))
+            if transpose:
+                self.upsample_layers.append(keras.layers.Conv2DTranspose(
+                    filters,
+                    (3, 3),
+                    strides=(2, 2),
+                    padding='same',
+                    name=f'upsample_layers_{i}'))
+            else:
+                self.upsample_layers.append(keras.layers.UpSampling2D(
+                    size=(2, 2),
+                    interpolation='bilinear',
+                    name=f'upsample_layers_{i}'))
             self.concat_layers.append(keras.layers.Concatenate(name=f'concat_{i}'))
 
         self.output_conv = keras.layers.Conv2D(

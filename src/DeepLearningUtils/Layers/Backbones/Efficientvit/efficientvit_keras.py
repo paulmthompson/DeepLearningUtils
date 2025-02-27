@@ -193,7 +193,10 @@ def EfficientViT_B(
         stack_outputs.append(nn)
 
     for upsample_level in range(upsample_levels):
-        nn = keras.layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(nn)
+        nn = keras.layers.UpSampling2D(
+            size=(2, 2), 
+            interpolation='bilinear',
+            dtype="float32")(nn) # Does not work with bfloat16 and bilinear
         stack_id = (upsample_level + 2) * -1
         nn = keras.layers.Concatenate()([nn, stack_outputs[stack_id]])
 

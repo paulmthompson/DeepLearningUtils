@@ -59,6 +59,10 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
           if self.rotate
           else ops.zeros((1,))
       )
+
+      mag = ops.cast(mag, keras.backend.floatx())
+      angles = ops.cast(angles, keras.backend.floatx())
+
       fx = mag * ops.cos(angles)
       fy = mag * ops.sin(angles)
 
@@ -67,9 +71,9 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
 
     def init_t_xy(self):
         # t is a sequence from 0 to height*width - 1
-        t = ops.arange(self.height * self.width, dtype="float32")
-        t_x = ops.cast(t % self.width, "float32") # x coordinate
-        t_y = ops.cast(ops.floor(t / self.width), "float32") # y coordinate
+        t = ops.arange(self.height * self.width, dtype=keras.backend.floatx())
+        t_x = ops.cast(t % self.width, keras.backend.floatx()) # x coordinate
+        t_y = ops.cast(ops.floor(t / self.width), keras.backend.floatx()) # y coordinate
         return t_x, t_y
 
     def compute_mixed_cis(self, t_x, t_y):
@@ -81,6 +85,7 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
         freq_sum = freqs_x + freqs_y
 
         #freq_sum_complex = ops.cast(freq_sum, "complex64")
+        freq_sum = ops.cast(freq_sum, "float32")
         freq_sum_complex = tf.complex(freq_sum, 0.0)
 
         freqs_cis = ops.exp(1.0j * freq_sum_complex)
@@ -93,6 +98,7 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
     def apply_rotary_emb(self, q, freqs_cis):
 
         #q_complex = ops.cast(q, "complex64")
+        q = ops.cast(q, "float32")
         q_complex = tf.complex(q, 0.0)
 
         q_rotated = q_complex * freqs_cis[None, None, :, :] # batch, seq_len, height*width, dim
