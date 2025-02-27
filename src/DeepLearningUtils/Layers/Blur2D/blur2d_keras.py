@@ -79,10 +79,14 @@ class Blur2D(keras.layers.Layer):
 
     def call(self, inputs):
         # Apply depthwise convolution for blurring
+
+        input_dtype = inputs.dtype
+        inputs = keras.ops.cast(inputs, keras.backend.floatx())
         blurred = keras.ops.depthwise_conv(
             inputs,
             self.kernel,
             strides=(self.stride, self.stride),
             padding=self.padding,
         )
+        blurred = keras.ops.cast(blurred, input_dtype)
         return blurred
