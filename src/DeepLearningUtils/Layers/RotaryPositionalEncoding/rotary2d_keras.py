@@ -49,6 +49,23 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
 
     def init_2d_freqs(self, input_shape, dtype="complex64"):
 
+        dim = input_shape[1] * 2
+        mag = 1 / (self.theta ** (ops.arange(0, dim, 4)[: (dim // 4)] / dim ))
+        angles = np.random.uniform((1,)) * 2 * math.pi if self.rotate else ops.zeros((1,))
+        fx = keras.ops.concatenate(
+            [
+                mag * ops.cos(angles), 
+                mag * ops.cos(math.pi/2 + angles)
+            ], axis=-1)
+        fy = keras.ops.concatenate(
+            [
+                mag * ops.sin(angles), 
+                mag * ops.sin(math.pi/2 + angles)
+            ], axis=-1)
+        freqs = keras.ops.stack([fx, fy], axis=0)
+        return ops.cast(freqs, dtype)
+      
+        """
       dim = input_shape[1] * 2 #! changed this
       mag = 1 / (
           self.theta
@@ -68,6 +85,7 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
 
       freqs = ops.stack([fx, fy], axis=0)
       return ops.cast(freqs, dtype)
+      """
 
     def init_t_xy(self):
         # t is a sequence from 0 to height*width - 1
