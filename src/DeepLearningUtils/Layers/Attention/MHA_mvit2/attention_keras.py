@@ -117,7 +117,7 @@ class DotProductAttention(keras.layers.Layer):
         score = keras.ops.matmul(query, key)
         if self.use_scale:
             scale = keras.ops.cast(1 / keras.ops.sqrt(query.shape[-1]), score.dtype)
-            score = score / scale
+            score = score * scale
 
         if self.query_positional_embedding is not None:
             score = self.query_positional_embedding([query, score])
