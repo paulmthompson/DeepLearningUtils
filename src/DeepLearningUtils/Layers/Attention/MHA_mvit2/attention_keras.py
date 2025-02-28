@@ -112,10 +112,9 @@ class DotProductAttention(keras.layers.Layer):
         #query, key_input, value = inputs
         key = keras.ops.transpose(key_input, axes=[0, 1, 3, 2])
         score = keras.ops.matmul(query, key)
-        score = keras.ops.cast(score, keras.backend.floatx())
         if self.use_scale:
-            score *= keras.ops.cast(1, keras.backend.floatx()) / keras.ops.sqrt(
-                keras.ops.cast(query.shape[-1], keras.backend.floatx()))
+            scale = keras.ops.cast(1 / keras.ops.sqrt(query.shape[-1]), score.dtype)
+            score = score / scale
 
         if self.query_positional_embedding is not None:
             score = self.query_positional_embedding([query, score])
@@ -123,7 +122,7 @@ class DotProductAttention(keras.layers.Layer):
             score = self.key_positional_embedding([key_input, score])
 
         if mask is not None:
-            score -= 1.e9 * (1 - mask)
+            score -= 1.e9 * (keras.ops.cast(1.0, mask.dtype) - mask)
 
         score = keras.activations.softmax(score, axis=-1)
         score = self.drop(score)
