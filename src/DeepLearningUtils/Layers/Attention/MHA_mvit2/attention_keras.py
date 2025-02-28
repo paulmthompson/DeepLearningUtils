@@ -93,6 +93,9 @@ class DotProductAttention(keras.layers.Layer):
 
         score = keras.ops.matmul(query, key)
 
+        # -2 in original implementation
+        score = score / keras.ops.sum(score, axis=1, keepdims=True)
+
         if self.query_positional_embedding is not None:
             score = self.query_positional_embedding([query_input, score])
         if self.key_positional_embedding is not None:
