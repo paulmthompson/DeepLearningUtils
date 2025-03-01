@@ -108,22 +108,34 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
 
         freqs_cis = ops.exp(1.0j * freq_sum_complex)
 
-        freqs_cis = ops.concatenate([freqs_cis, freqs_cis], axis = -1)
+        #freqs_cis = ops.concatenate([freqs_cis, freqs_cis], axis = -1)
 
-        freqs_cis = freqs_cis[..., :self.dim]
+        #freqs_cis = freqs_cis[..., :self.dim]
         return freqs_cis 
 
     def apply_rotary_emb(self, q, freqs_cis):
 
+        _, seq_len, hw, dim = ops.shape(q)
+
+        # Reshape so that it is #batch, seq_len, height*width, dim/2, 2.
+        # Then make it complex with the last dimension
+
         #q_complex = ops.cast(q, "complex64")
         q = ops.cast(q, "float32")
-        q_complex = tf.complex(q, 0.0)
+        q = keras.ops.reshape(q, (-1, seq_len, hw, dim//2, 2))
+
+        q_complex = tf.complex(ops.cast(q[..., 0], "float32"), ops.cast(q[..., 1], "float32"))
 
         q_rotated = q_complex * freqs_cis[None, None, :, :] # batch, seq_len, height*width, dim
 
         q_rotated_real = ops.real(q_rotated)
+        q_rotated_complex = ops.imag(q_rotated)
 
-        return q_rotated_real
+        q_rotated = ops.stack([q_rotated_real, q_rotated_complex], axis=-1)
+
+        q_rotated = keras.ops.reshape(q_rotated, (-1, seq_len, hw, dim))
+
+        return q_rotated
 
     def call(self, q):
 
