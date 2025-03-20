@@ -93,6 +93,8 @@ def create_memory_model(
         name="memory_labels"
     )
 
+    memory_label_num = keras.Input(shape=(1,), name="memory_frame_num")
+
     memory_encoder_layer = MemoryEncoderLayer(
         base_memory_model,
         mask_encoder_model,
@@ -105,7 +107,8 @@ def create_memory_model(
         combine_operation=combine_operation
     )
 
-    memory_encoder_out = memory_encoder_layer([memory_inputs, memory_labels])
+    memory_encoder_out = memory_encoder_layer([memory_inputs, memory_labels, memory_label_num])
+    #memory_encoder_out = memory_encoder_layer([memory_inputs, memory_labels])
 
     memory_encoder_pooled = image_pooling(
         memory_encoder_out,
@@ -118,7 +121,11 @@ def create_memory_model(
         model_name = f"memory_model_{base_memory_model_output_layer}"
 
     model = keras.Model(
-        inputs=[memory_inputs, memory_labels],
+        inputs=[
+            memory_inputs,
+            memory_labels,
+            memory_label_num
+        ],
         outputs=memory_encoder_pooled,
         name=model_name)
     return model
@@ -197,7 +204,8 @@ class MemoryEncoderLayer(keras.layers.Layer):
         self.mask_encoder.build((None, self.height, self.width, 1))
 
     def build(self, input_shape):
-        memory_input_shape, memory_label_shape = input_shape
+        memory_input_shape, memory_label_shape, memory_label_num_shape = input_shape
+        #memory_input_shape, memory_label_shape = input_shape
 
         self.memory_model_distributed = keras.layers.TimeDistributed(
             self.memory_model
@@ -258,13 +266,16 @@ class MemoryEncoderLayer(keras.layers.Layer):
             raise ValueError(f"Combine operation {self.combine_operation} not supported")
 
     def call(self, inputs):
-        memory_inputs, memory_labels = inputs
+        memory_inputs, memory_labels, memory_label_num = inputs
+        #memory_inputs, memory_labels = inputs
 
         # Apply the memory model
         memory_encoder_out = self.memory_model_distributed(memory_inputs)
 
         # Apply the mask encoder
         encoded_masks = self.mask_encoder_distributed(memory_labels)
+
+        memory_encoder_out = keras.ops.repeat(memory_encoder_out, keras.ops.cast(memory_label_num[:,0], "int32"), axis=0)
 
         # Combine the outputs
         memory_encoder_out = self.combine_layer([memory_encoder_out, encoded_masks])
@@ -274,9 +285,10 @@ class MemoryEncoderLayer(keras.layers.Layer):
         return memory_encoder_out
 
     def compute_output_shape(self, input_shape):
-        memory_inputs_shape, memory_labels_shape = input_shape
+        memory_inputs_shape, memory_labels_shape, num_frames_shape = input_shape
+        #memory_inputs_shape, memory_labels_shape = input_shape
         base_model_output = self.memory_model.model.output_shape
-        output_shape = (memory_inputs_shape[0],
+        output_shape = (memory_labels_shape[0],
                         memory_inputs_shape[1],
                         base_model_output[1],
                         base_model_output[2],
