@@ -13,7 +13,6 @@ class DiceMultiClass(keras.metrics.Metric):
         self.smooth = 1e-6
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = keras.activations.sigmoid(y_pred)
         for i in range(self.num_classes):
             intersection = keras.ops.sum(y_true[..., i] * y_pred[..., i])
             self.true_positives[i].assign_add(intersection)
