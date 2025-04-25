@@ -18,6 +18,9 @@ class FocalLossMultiClass(keras.metrics.Metric):
         # Calculate focal loss for all classes
         batch_size = keras.ops.shape(y_true)[0]
 
+        y_true = keras.ops.cast(y_true, "float32")
+        y_pred = keras.ops.cast(y_pred, "float32")
+
         # Calculate pt (probability of true class)
         pt = y_true * y_pred + (1 - y_true) * (1 - y_pred)
 
