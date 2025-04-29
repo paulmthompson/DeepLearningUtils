@@ -17,8 +17,8 @@ from src.DeepLearningUtils.Layers.RelativePositionalEmbedding.positional_embeddi
 from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weights_to_pytorch_by_name
 
 @pytest.mark.parametrize("query_shape, key_shape, query_dim, heads, drop_rate", [
-    ((10, 32, 32, 64), (10, 32, 32, 64), 64, 8, 0.0),
-    ((20, 16, 16, 128), (20, 16, 16, 128), 128, 4, 0.0)
+    ((1, 32, 32, 64), (1, 32, 32, 64), 64, 8, 0.0),
+    ((5, 16, 16, 128), (5, 16, 16, 128), 128, 4, 0.0)
 ])
 def test_positional_embedding_layer_key(query_shape, key_shape, query_dim, heads, drop_rate):
     # Create Keras layer
