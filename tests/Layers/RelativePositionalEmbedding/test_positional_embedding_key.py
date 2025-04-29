@@ -3,6 +3,7 @@ import numpy as np
 
 import os
 os.environ["KERAS_BACKEND"] = "torch"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import torch
 import keras

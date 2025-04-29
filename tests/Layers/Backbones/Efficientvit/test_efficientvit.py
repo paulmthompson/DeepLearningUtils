@@ -105,5 +105,22 @@ def test_model_conversion(
         print(i)
         np.testing.assert_allclose(keras_output[i], pytorch_output[i].cpu().detach().numpy().transpose(0, 2, 3, 1), rtol=1e-5, atol=1e-5)
 
+    # Test float16
+    keras_model16 = KerasEfficientViT(
+        block_types=block_types,
+        stem_width=stem_width,
+        output_filters=output_filters,
+        input_shape=(256, 256, 3),
+        use_norm=use_norm,
+        upsample_levels=upsample_levels,
+        anti_aliasing=anti_aliasing
+    ).to(device)
+
+    keras.config.set_dtype_policy("mixed_bfloat16")
+    keras_input = keras.Input(shape=(256, 256, 3))
+
+    keras_output = keras_model16(keras_input)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
