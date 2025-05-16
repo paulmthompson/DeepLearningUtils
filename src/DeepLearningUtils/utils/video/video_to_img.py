@@ -2,6 +2,29 @@
 import os
 import subprocess
 
+"""
+Example usage:
+
+
+from video_to_img import extract_frames_from_videos
+
+import os
+
+# Look in every subdirectory in this folder and find filepath to mp4 files
+training_path = "/mnt/d/Deep_Learning/Whisker_Videos"
+#training_path = "/home/wanglab/Data/Whisker_Videos"
+
+video_files = []
+for root, _, files in os.walk(training_path):
+        for file in files:
+            if file.endswith('.mp4'):
+                video_files.append(os.path.join(root, file))
+
+print(f"Found {len(video_files)} video files")
+
+extract_frames_from_videos(training_path, "/mnt/d/Deep_Learning/Whisker_Images", frame_size=(256, 256))
+
+"""
 
 def extract_frames_from_videos(training_path, output_path, frame_size=(256, 256)):
     # Walk through the directory structure and collect video file names
