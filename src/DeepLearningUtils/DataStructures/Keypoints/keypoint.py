@@ -235,27 +235,71 @@ class VideoKeypoints:
         return filtered
 
 
-def read_keypoint_csv(
-        csv_path,
-        delimiter=" ",):
-    keypoint_list = []
+def read_keypoint_csv(csv_path, delimiter=" "):
+    """
+    Read keypoints from a CSV file into an ordered dictionary.
 
-    csvfile = open(csv_path, newline="")
-    reader = csv.reader(csvfile, delimiter=delimiter)
-    for row in reader:
-        keypoint_list.append(row)
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file containing keypoint data
+    delimiter : str, optional
+        Delimiter used in the CSV file, default is space
 
-    print(f"Read {len(keypoint_list)} keypoints from {csv_path}")
+    Returns
+    -------
+    collections.OrderedDict
+        Ordered dictionary mapping frame numbers (int) to keypoint coordinates [y, x]
 
-    keypoint_list = keypoint_list[1:]  # Remove header
-
+    Raises
+    ------
+    FileNotFoundError
+        If the specified CSV file does not exist
+    ValueError
+        If the CSV file is empty or has invalid format
+    """
     keypoint_coordinates = OrderedDict()
 
-    for i in range(len(keypoint_list)):
-        frame = keypoint_list[i][0]
-        keypoint_coordinates[int(frame)] = [
-            round(float(keypoint_list[i][2])),
-            round(float(keypoint_list[i][1])),
-        ]
+    try:
+        with open(csv_path, 'r', newline="") as csvfile:
+            reader = csv.reader(csvfile, delimiter=delimiter)
+
+            # Get header row to validate format
+            try:
+                header = next(reader)
+                expected_columns = ["Frame", "X", "Y", "Probability"]
+
+                # Basic check of header structure
+                if not all(col in header for col in expected_columns[:3]):
+                    raise ValueError(f"CSV header must contain columns: {', '.join(expected_columns[:3])}")
+
+                # Read and process data rows
+                row_count = 0
+                for row in reader:
+                    row_count += 1
+                    if len(row) < 3:
+                        continue  # Skip rows with insufficient data
+
+                    try:
+                        frame = int(float(row[0]))
+                        x = float(row[1])
+                        y = float(row[2])
+
+                        # Store coordinates in [y, x] format as per existing implementation
+                        keypoint_coordinates[frame] = [round(y), round(x)]
+                    except (ValueError, IndexError) as e:
+                        print(f"Warning: Could not parse row {row_count}: {row}")
+                        continue
+
+                print(f"Read {len(keypoint_coordinates)} valid keypoints from {csv_path}")
+
+                if not keypoint_coordinates:
+                    print("Warning: No valid keypoints found in the file")
+
+            except StopIteration:
+                raise ValueError("CSV file is empty or contains only a header")
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
     return keypoint_coordinates
