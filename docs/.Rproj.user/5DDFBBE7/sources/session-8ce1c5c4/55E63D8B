@@ -1,0 +1,28 @@
+{
+    "id": "55E63D8B",
+    "path": "//wsl.localhost/Ubuntu/home/wanglab/Programs/DeepLearningUtils/docs/user_guide/labels/index.qmd",
+    "project_path": "user_guide/labels/index.qmd",
+    "type": "quarto_markdown",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1747425502419.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "rmdVisualMode": "true",
+        "rmdVisualWrapConfigured": "true",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "1,14",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1747425508,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1747425509028,
+    "read_only": false,
+    "read_only_alternatives": []
+}

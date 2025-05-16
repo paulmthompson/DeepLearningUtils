@@ -1,0 +1,35 @@
+{
+  "user_guide/labels/keypoint_labels.qmd": {
+    "keypoint_labels.html": "128e2087"
+  },
+  "user_guide/index.qmd": {
+    "index.html": "f540f656"
+  },
+  "user_guide/data_types/index.qmd": {
+    "index.html": "17bd7827"
+  },
+  "user_guide/data_types/keypoints.qmd": {
+    "keypoints.html": "89753d82"
+  },
+  "user_guide/models/keypoint_detector.qmd": {
+    "keypoint_detector.html": "63c03aef"
+  },
+  "user_guide/models/index.qmd": {
+    "index.html": "a7818b77"
+  },
+  "user_guide/models/segmentation_model.qmd": {
+    "segmentation_model.html": "a6729c6b"
+  },
+  "user_guide/labels/index.qmd": {
+    "index.html": "155b01ee"
+  },
+  "user_guide/labels/segmentation_labels.qmd": {
+    "segmentation_labels.html": "3206a6bf"
+  },
+  "how_to_guides/installation.qmd": {
+    "installation.html": "30f4249e"
+  },
+  "index.qmd": {
+    "index.html": "81cb2b8a"
+  }
+}
