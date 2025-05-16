@@ -8,6 +8,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 import torch
 import keras
 
+keras.config.set_floatx('float32')
+keras.config.set_dtype_policy("float32")
+
 from src.DeepLearningUtils.Layers.RelativePositionalEmbedding.positional_embedding_keras import \
     RelativePositionalEmbedding2D as KerasRelativePositionalEmbedding2D
 from src.DeepLearningUtils.Layers.RelativePositionalEmbedding.positional_embedding_pytorch import \
@@ -31,12 +34,12 @@ def test_positional_embedding_layer(query_shape, key_shape, query_dim, heads, dr
     keras_input_query = np.random.rand(batch_size, heads, query_seq_len * query_height * query_width, query_dim).astype(np.float32)
     keras_input_scores = np.random.rand(batch_size, heads, query_seq_len * query_height * query_width, key_seq_len * key_height * key_width).astype(np.float32)
 
-    keras_input = [keras.Input(shape=keras_input_query.shape[1:]),
-                     keras.Input(shape=keras_input_scores.shape[1:])]
-    keras_output = keras_layer(keras_input)
-    keras_model = keras.Model(inputs=keras_input, outputs=keras_output)
+    #keras_input = [keras.Input(shape=keras_input_query.shape[1:]),
+    #                 keras.Input(shape=keras_input_scores.shape[1:])]
+    #keras_output = keras_layer(keras_input)
+    #keras_model = keras.Model(inputs=keras_input, outputs=keras_output)
 
-    keras_output = keras_model.predict([keras_input_query, keras_input_scores])
+    keras_output = keras.ops.convert_to_numpy(keras_layer([keras_input_query, keras_input_scores]))
 
     # Create PyTorch layer
     torch_layer = TorchRelativePositionalEmbedding2D(query_shape, key_shape, query_dim, heads, drop_rate)
@@ -54,6 +57,8 @@ def test_positional_embedding_layer(query_shape, key_shape, query_dim, heads, dr
 
     # Compare outputs
     np.testing.assert_allclose(keras_output, torch_output, rtol=1e-5, atol=1e-3)
+    #np.testing.assert_allclose(keras_output, keras_input_scores, rtol=1e-5, atol=1e-3)
+    #np.testing.assert_allclose(torch_output, torch_input_scores, rtol=1e-5, atol=1e-3)
 
     # Create JIT compiled PyTorch model
     pytorch_model_jit = torch.jit.script(torch_layer)

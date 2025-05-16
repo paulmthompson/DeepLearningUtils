@@ -5,15 +5,72 @@ import numpy as np
 
 
 class Keypoint:
+    """
+    Represents a single keypoint detected in an image.
+
+    This class extracts the coordinates of the maximum intensity point in an image.
+    When multiple points share the maximum value, it averages their coordinates.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        2D array representing an image or probability map
+
+    Attributes
+    ----------
+    prob : float
+        Probability/confidence value of the keypoint
+    x : int
+        X-coordinate of the keypoint
+    y : int
+        Y-coordinate of the keypoint
+
+    Raises
+    ------
+    ValueError
+        If the input is not a valid 2D numpy array or is empty
+    """
+
     def __init__(self, image):
+        if not isinstance(image, np.ndarray):
+            raise ValueError("Input image must be a numpy array")
+
+        if image.size == 0:
+            raise ValueError("Input image cannot be empty")
+
+        if image.ndim != 2:
+            raise ValueError(f"Expected 2D array, got {image.ndim}D array")
+
         self.prob = np.max(image)
         coords = np.argwhere(image == self.prob)
-        if coords.shape[0] > 1:
+
+        if coords.size == 0:
+            # This should not happen if image is not empty, but just in case
+            self.x = 0
+            self.y = 0
+            self.prob = 0.0
+        elif coords.shape[0] > 1:
+            # Multiple points with max value - take average
             self.x = round(np.mean(coords[:, 0]))
             self.y = round(np.mean(coords[:, 1]))
         else:
             self.x = coords[0, 0]
             self.y = coords[0, 1]
+
+    def __repr__(self):
+        """Return string representation of the keypoint."""
+        return f"Keypoint(x={self.x}, y={self.y}, prob={self.prob:.4f})"
+
+    def as_tuple(self):
+        """
+        Returns the keypoint coordinates as a tuple.
+
+        Returns
+        -------
+        tuple
+            (x, y) coordinates of the keypoint
+        """
+        return (self.x, self.y)
 
 
 class VideoKeypoints:
