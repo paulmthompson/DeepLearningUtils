@@ -286,7 +286,7 @@ class KeypointDataParser:
                                 print(f'Occluded keypoint for frame {frame_num} in {keypoint_name}')
                             else:
                                 # Create Gaussian mask for visible keypoint
-                                mask = self.create_gaussian_mask(
+                                mask = create_gaussian_mask(
                                     original_resolution,
                                     self.target_resolution,
                                     coords,
