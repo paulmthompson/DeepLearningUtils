@@ -4,6 +4,7 @@ import csv
 import numpy as np
 import re
 import math
+from tqdm import tqdm
 
 from typing import List, Dict, Tuple, Optional, Union, Set
 
@@ -113,7 +114,9 @@ class KeypointDataParser:
                               if os.path.isdir(os.path.join(self.data_folder, filename))]
 
         # Use tqdm progress bar
-        iterable = create_progress_bar(len(experiment_folders), label='Loading Experiments')
+        iterable = enumerate(experiment_folders)
+        progress = tqdm(iterable, desc='Loading', total=len(experiment_folders), ascii=True, leave=True, position=0)
+        iterable = progress
 
         training_images = []
         training_image_filenames = []
