@@ -133,7 +133,7 @@ class KeypointDataParser:
         training_labels = [[] for _ in range(n_features)]
 
         for i, experiment_folder in iterable:
-            experiment_path = os.path.join(self.data_folder, experiment_folder)
+            experiment_path = os.path.join(self.data_folder, str(experiment_folder))
 
             print(f'Loading experiment folder: {experiment_folder}')
 
