@@ -34,6 +34,7 @@ class LineDataGenerator(keras.utils.Sequence):
         line_width: int = 1,
         max_point_distance: int = 5,
         use_distance_maps: bool = False,
+        include_background: bool = True,
         **kwargs
     ):
         """
@@ -61,6 +62,8 @@ class LineDataGenerator(keras.utils.Sequence):
             Maximum allowed distance between consecutive points before interpolation
         use_distance_maps : bool
             Whether to return distance maps instead of binary masks
+        include_background : bool
+            Whether to include a background channel in the output masks
         **kwargs
             Additional arguments passed to keras.utils.Sequence
 
@@ -94,6 +97,7 @@ class LineDataGenerator(keras.utils.Sequence):
         self.line_width = line_width
         self.max_point_distance = max_point_distance
         self.use_distance_maps = use_distance_maps
+        self.include_background = include_background
         
         # Get image dimensions
         self._image_height = images.shape[1]
@@ -214,8 +218,7 @@ class LineDataGenerator(keras.utils.Sequence):
     
     def create_masks(
         self,
-        lines: List[LineStringsOnImage],
-        include_background: bool = True
+        lines: List[LineStringsOnImage]
     ) -> np.ndarray:
         """
         Create binary masks or distance maps from lines.
@@ -224,8 +227,6 @@ class LineDataGenerator(keras.utils.Sequence):
         ----------
         lines : List[LineStringsOnImage]
             List of LineStringsOnImage objects
-        include_background : bool
-            Whether to include background channel
             
         Returns
         -------
@@ -249,7 +250,7 @@ class LineDataGenerator(keras.utils.Sequence):
             # Stack line masks
             mask = np.stack(line_masks, axis=-1)
             
-            if include_background:
+            if self.include_background:
                 background_mask = np.expand_dims(
                     np.logical_not(np.any(mask, axis=-1)),
                     axis=-1
