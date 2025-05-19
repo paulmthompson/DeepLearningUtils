@@ -176,17 +176,25 @@ def process_video_batch(
             progress.close()
 
     # Write summary
-    log_handle.write("\n" + "=" * 80 + "\n")
-    log_handle.write("Processing Summary\n")
-    log_handle.write(f"Total videos processed: {total_videos}\n")
-    log_handle.write(f"Total frames processed: {total_frames_processed}\n")
-    log_handle.write(f"Total processing time: {total_processing_time:.2f} seconds\n")
-    log_handle.write(f"Average time per frame: {total_processing_time/total_frames_processed:.3f} seconds\n")
-    log_handle.write(f"Log file: {log_file}\n")
-    log_handle.write(f"Completed at: {datetime.now()}\n")
-
-    log_handle.close()
-    print(f"\nProcessing complete. Log file: {log_file}")
+    try:
+        log_handle.write("\n" + "=" * 80 + "\n")
+        log_handle.write("Processing Summary\n")
+        log_handle.write(f"Total videos processed: {total_videos}\n")
+        log_handle.write(f"Total frames processed: {total_frames_processed}\n")
+        
+        if total_frames_processed > 0:
+            log_handle.write(f"Total processing time: {total_processing_time:.2f} seconds\n")
+            log_handle.write(f"Average time per frame: {total_processing_time/total_frames_processed:.3f} seconds\n")
+        else:
+            log_handle.write("No frames were successfully processed\n")
+            
+        log_handle.write(f"Log file: {log_file}\n")
+        log_handle.write(f"Completed at: {datetime.now()}\n")
+    except Exception as e:
+        print(f"Error writing summary to log: {str(e)}")
+    finally:
+        log_handle.close()
+        print(f"\nProcessing complete. Log file: {log_file}")
 
 
 def prediction_loop(
