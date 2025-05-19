@@ -82,6 +82,7 @@ def process_video_batch(
 
             # Get video properties
             height, width = get_video_height_width(vidcap)
+            height, width = int(height), int(width)  # Convert to integers for array dimensions
             num_frames = get_total_frames(vidcap)
             
             # Calculate scaling factors
