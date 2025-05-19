@@ -140,7 +140,8 @@ def prepare_line_generator_data(
     df : pd.DataFrame
         DataFrame from load_line_data
     label_names : Optional[List[str]]
-        Names of labels to include. If None, uses all labels found
+        Names of labels to include. If None, uses all labels found.
+        All specified labels must be present for an entry to be included.
     validation_folders : Optional[List[str]]
         List of folder_ids to use for validation. If None, uses all data
     return_numpy : bool
@@ -172,17 +173,17 @@ def prepare_line_generator_data(
     labels = []
     
     for _, row in df.iterrows():
+        # Check if all required labels are present
+        if not all(label_name in row['labels'] for label_name in label_names):
+            continue
+            
         # Get image
         images.append(row['image'])
         
         # Get labels for this image
         image_labels = []
         for label_name in label_names:
-            if label_name in row['labels']:
-                image_labels.append(row['labels'][label_name])
-            else:
-                # If label is missing, create empty array
-                image_labels.append(np.zeros((0, 2)))
+            image_labels.append(row['labels'][label_name])
         
         labels.append(image_labels)
     
