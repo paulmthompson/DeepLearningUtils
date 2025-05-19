@@ -1,5 +1,7 @@
 import numpy as np
-import tensorflow as tf
+import keras
+
+
 from typing import List, Tuple, Optional, Union, Any
 import imgaug.augmenters as iaa
 from imgaug.augmentables.lines import LineString, LineStringsOnImage
@@ -12,7 +14,7 @@ from src.DeepLearningUtils.utils.data_generation import (
 )
 
 
-class LineDataGenerator(tf.keras.utils.Sequence):
+class LineDataGenerator(keras.utils.Sequence):
     """
     Data generator for line/whisker detection training.
     
@@ -60,7 +62,7 @@ class LineDataGenerator(tf.keras.utils.Sequence):
         use_distance_maps : bool
             Whether to return distance maps instead of binary masks
         **kwargs
-            Additional arguments passed to tf.keras.utils.Sequence
+            Additional arguments passed to keras.utils.Sequence
 
         Raises
         ------
