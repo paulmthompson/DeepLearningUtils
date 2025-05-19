@@ -18,6 +18,7 @@ def load_line_data(
     labels_dir_name: str = 'labels',
     csv_delimiter: str = ',',
     experiment_folders: Optional[List[str]] = None,
+    image_prefix: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load line data from a folder structure into a pandas DataFrame.
@@ -38,6 +39,10 @@ def load_line_data(
         Delimiter character used in CSV files
     experiment_folders : Optional[List[str]]
         List of experiment folder names to include. If None, all subfolders will be used.
+    image_prefix : Optional[str]
+        Prefix to remove from image filenames to match CSV filenames.
+        For example, if images are named "img00001.png" and CSVs are "00001.csv",
+        set image_prefix="img"
         
     Returns
     -------
@@ -98,8 +103,10 @@ def load_line_data(
             image_resized = cv2.resize(image, (target_resolution[1], target_resolution[0]),
                                      interpolation=cv2.INTER_AREA)
             
-            # Extract image name (remove extension)
+            # Extract image name (remove extension and optional prefix)
             img_name = os.path.splitext(os.path.basename(image_path))[0]
+            if image_prefix and img_name.startswith(image_prefix):
+                img_name = img_name[len(image_prefix):]
             images_dict[img_name] = image_resized
         
         print(f'Original resolution: {old_resolution}')
@@ -216,7 +223,8 @@ def load_line_data_for_generator(
     images_dir_name: str = 'images',
     labels_dir_name: str = 'labels',
     csv_delimiter: str = ',',
-    return_numpy: bool = True
+    return_numpy: bool = True,
+    image_prefix: Optional[str] = None,
 ) -> Union[Tuple[List[np.ndarray], List[List[np.ndarray]]],
            Tuple[np.ndarray, np.ndarray]]:
     """
@@ -245,6 +253,10 @@ def load_line_data_for_generator(
         Delimiter character used in CSV files
     return_numpy : bool
         If True, returns numpy arrays instead of lists
+    image_prefix : Optional[str]
+        Prefix to remove from image filenames to match CSV filenames.
+        For example, if images are named "img00001.png" and CSVs are "00001.csv",
+        set image_prefix="img"
         
     Returns
     -------
@@ -266,7 +278,8 @@ def load_line_data_for_generator(
         images_dir_name=images_dir_name,
         labels_dir_name=labels_dir_name,
         csv_delimiter=csv_delimiter,
-        experiment_folders=experiment_folders
+        experiment_folders=experiment_folders,
+        image_prefix=image_prefix
     )
     
     # Prepare data for generator
