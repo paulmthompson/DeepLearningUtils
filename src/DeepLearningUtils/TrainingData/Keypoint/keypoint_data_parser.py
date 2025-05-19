@@ -10,6 +10,7 @@ from typing import List, Dict, Tuple, Optional, Union, Set
 
 from src.DeepLearningUtils.utils.progress_bar import create_progress_bar
 from src.DeepLearningUtils.utils.image_processing.processing import create_gaussian_mask
+from src.DeepLearningUtils.utils.data_conversion import convert_img_numpy, convert_labels_numpy
 
 
 class KeypointDataParser:
@@ -24,7 +25,8 @@ class KeypointDataParser:
                  image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg'),
                  images_dir_name: str = 'images',
                  labels_dir_name: str = 'labels',
-                 occlusion_markers: Tuple[str, ...] = ('nan', 'NaN', 'NAN', 'None')):
+                 occlusion_markers: Tuple[str, ...] = ('nan', 'NaN', 'NAN', 'None'),
+                 return_numpy: bool = True):
         """
         Parser for keypoint training data.
 
@@ -53,6 +55,8 @@ class KeypointDataParser:
             Name of the directory containing label data
         occlusion_markers : Tuple[str, ...]
             Values in CSV that indicate the keypoint is occluded
+        return_numpy : bool
+            If True, returns numpy arrays instead of lists
         """
         self.data_folder = data_folder
         self.target_resolution = target_resolution
@@ -65,6 +69,7 @@ class KeypointDataParser:
         self.images_dir_name = images_dir_name
         self.labels_dir_name = labels_dir_name
         self.occlusion_markers = occlusion_markers
+        self.return_numpy = return_numpy
 
     def extract_frame_number(self, filename: str) -> Union[int, str]:
         """
@@ -98,17 +103,24 @@ class KeypointDataParser:
         except ValueError:
             return frame_num
 
-    def parse_data(self) -> Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]]:
+    def parse_data(self) -> Union[Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]], 
+                                 Tuple[np.ndarray, List[str], np.ndarray]]:
         """
         Parse keypoint data from the data folder.
 
         Returns
         -------
-        Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]]
-            Tuple containing:
+        Union[Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]], 
+              Tuple[np.ndarray, List[str], np.ndarray]]
+            If return_numpy is False:
             - List of training images
             - List of image filenames
             - List of lists of labels (one list per keypoint)
+            
+            If return_numpy is True:
+            - Stacked numpy array of training images
+            - List of image filenames
+            - Stacked numpy array of labels
         """
         experiment_folders = [filename for filename in os.listdir(self.data_folder)
                               if os.path.isdir(os.path.join(self.data_folder, filename))]
@@ -312,7 +324,14 @@ class KeypointDataParser:
                     training_labels[i].extend(experiment_labels[i])
 
         print(f'Loaded {len(training_images)} images and {n_features} keypoint types')
-        return training_images, training_image_filenames, training_labels
+        
+        if self.return_numpy:
+            # Convert to numpy arrays
+            images_np = convert_img_numpy(training_images)
+            labels_np = convert_labels_numpy(training_labels)
+            return images_np, training_image_filenames, labels_np
+        else:
+            return training_images, training_image_filenames, training_labels
 
 
 def load_keypoint_data(data_folder: str,
@@ -325,8 +344,9 @@ def load_keypoint_data(data_folder: str,
                        image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg'),
                        images_dir_name: str = 'images',
                        labels_dir_name: str = 'labels',
-                       occlusion_markers: Tuple[str, ...] = ('nan', 'NaN', 'NAN', 'None')) -> Tuple[
-    List[np.ndarray], List[str], List[List[np.ndarray]]]:
+                       occlusion_markers: Tuple[str, ...] = ('nan', 'NaN', 'NAN', 'None'),
+                       return_numpy: bool = True) -> Union[Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]], 
+                                                         Tuple[np.ndarray, List[str], np.ndarray]]:
     """
     Load keypoint training data from a folder.
 
@@ -355,14 +375,22 @@ def load_keypoint_data(data_folder: str,
         Name of the directory containing label data
     occlusion_markers : Tuple[str, ...]
         Values in CSV that indicate the keypoint is occluded
+    return_numpy : bool
+        If True, returns numpy arrays instead of lists
 
     Returns
     -------
-    Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]]
-        Tuple containing:
+    Union[Tuple[List[np.ndarray], List[str], List[List[np.ndarray]]], 
+          Tuple[np.ndarray, List[str], np.ndarray]]
+        If return_numpy is False:
         - List of training images
         - List of image filenames
         - List of lists of labels (one list per keypoint)
+        
+        If return_numpy is True:
+        - Stacked numpy array of training images
+        - List of image filenames
+        - Stacked numpy array of labels
     """
     parser = KeypointDataParser(
         data_folder=data_folder,
@@ -375,7 +403,8 @@ def load_keypoint_data(data_folder: str,
         image_extensions=image_extensions,
         images_dir_name=images_dir_name,
         labels_dir_name=labels_dir_name,
-        occlusion_markers=occlusion_markers
+        occlusion_markers=occlusion_markers,
+        return_numpy=return_numpy
     )
 
     return parser.parse_data()
