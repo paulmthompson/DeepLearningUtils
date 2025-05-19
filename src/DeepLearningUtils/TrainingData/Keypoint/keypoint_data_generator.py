@@ -150,10 +150,7 @@ class KeypointDataGenerator(tf.keras.utils.Sequence):
         # Convert to float32
         X = X.astype('float32')
         y = y.astype('float32')
-        
-        # Normalize images to [0, 1]
-        X = X / 255.0
-        
+
         # Normalize heatmap labels to [0, 1]
         # Binary masks should already be in [0, 1]
         for k in range(self.n_keypoints):

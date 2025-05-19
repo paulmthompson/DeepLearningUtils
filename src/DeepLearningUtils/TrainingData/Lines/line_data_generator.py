@@ -296,7 +296,4 @@ class LineDataGenerator(keras.utils.Sequence):
         X = X.astype('float32')
         y = y.astype('float32')
         
-        # Normalize images to [0, 1]
-        X = X / 255.0
-        
         return X, y 
