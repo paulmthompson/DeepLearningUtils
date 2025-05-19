@@ -17,6 +17,7 @@ def load_line_data(
     images_dir_name: str = 'images',
     labels_dir_name: str = 'labels',
     csv_delimiter: str = ',',
+    experiment_folders: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Load line data from a folder structure into a pandas DataFrame.
@@ -35,6 +36,8 @@ def load_line_data(
         Name of the directory containing label data
     csv_delimiter : str
         Delimiter character used in CSV files
+    experiment_folders : Optional[List[str]]
+        List of experiment folder names to include. If None, all subfolders will be used.
         
     Returns
     -------
@@ -45,8 +48,16 @@ def load_line_data(
         - image: resized image array
         - labels: dictionary mapping label names to coordinate arrays
     """
-    experiment_folders = [f for f in os.listdir(data_folder) 
-                         if os.path.isdir(os.path.join(data_folder, f))]
+    # Get experiment folders to process
+    if experiment_folders is None:
+        experiment_folders = [f for f in os.listdir(data_folder) 
+                            if os.path.isdir(os.path.join(data_folder, f))]
+    else:
+        # Validate that specified folders exist
+        for folder in experiment_folders:
+            folder_path = os.path.join(data_folder, folder)
+            if not os.path.isdir(folder_path):
+                raise ValueError(f"Specified experiment folder does not exist: {folder}")
     
     data = []
     
@@ -200,6 +211,7 @@ def load_line_data_for_generator(
     target_resolution: Tuple[int, int] = (256, 256),
     label_names: Optional[List[str]] = None,
     validation_folders: Optional[List[str]] = None,
+    experiment_folders: Optional[List[str]] = None,
     image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg'),
     images_dir_name: str = 'images',
     labels_dir_name: str = 'labels',
@@ -217,9 +229,12 @@ def load_line_data_for_generator(
     target_resolution : Tuple[int, int]
         Target resolution to resize images to (height, width)
     label_names : Optional[List[str]]
-        Names of labels to include. If None, uses all labels found
+        Names of labels to include. If None, uses all labels found.
+        All specified labels must be present for an entry to be included.
     validation_folders : Optional[List[str]]
         List of folder_ids to use for validation. If None, uses all data
+    experiment_folders : Optional[List[str]]
+        List of experiment folder names to include. If None, all subfolders will be used.
     image_extensions : Tuple[str, ...]
         Tuple of valid image file extensions
     images_dir_name : str
@@ -250,7 +265,8 @@ def load_line_data_for_generator(
         image_extensions=image_extensions,
         images_dir_name=images_dir_name,
         labels_dir_name=labels_dir_name,
-        csv_delimiter=csv_delimiter
+        csv_delimiter=csv_delimiter,
+        experiment_folders=experiment_folders
     )
     
     # Prepare data for generator
