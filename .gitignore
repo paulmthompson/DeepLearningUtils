@@ -2,3 +2,4 @@
 .idea
 __pycache__
 DeepLearningUtils.egg-info
+docs/.Rproj.user
