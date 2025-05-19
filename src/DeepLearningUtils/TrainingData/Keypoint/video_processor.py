@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import time
+import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
