@@ -176,6 +176,7 @@ class CoMemoryAttentionModule(keras.layers.Layer):
             key_dim=self.key_dim,
             attention_drop_rate=self.attention_drop_rate,
             use_positional_embedding=self.use_positional_embedding,
+            use_key_positional_embedding=self.use_positional_embedding,
             use_linear_attention=self.use_linear_attention,
             query_embedding=self.use_qkv_embedding,
             key_embedding=self.use_qkv_embedding,
