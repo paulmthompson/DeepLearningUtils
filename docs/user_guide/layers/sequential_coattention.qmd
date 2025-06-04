@@ -1,0 +1,8 @@
+---
+title: "Sequential CoAttention"
+format: html
+---
+
+Sequential co attention is an interesting idea but I have not had the best success with it yet. The idea is that if a query needs to be compared with a sequence of keys and values you can take the output of an attention layer and use it as the query to the next key and value in the sequence. Compare this to having an extra dimension in regular attention that would need to be flattened for a large comparison between the query and key values. I think this is most used when the sequence of things to be attended to are from different media types say audio and visual. I wondered if this could be used to have an expanded memory bank when comparing an image to multiple images in a sequence. Particularly if you are memory limited the attention operation between a query frame and sequence of key value frames can be a large Matrix operation that expands with the sequence length. Additionally, while this approach with multiple images in the same Matrix allows each image at the time of attention to inform the others, it also can be difficult to add in some sequence identity that is purely ID based but not deterministic. For example if you have a random list of memory frames that does not specify temporal order it is easy to add in temporal encoding but it is not so simple to add in sequence and coding that the network does not expect to be temporal. 
+
+Brauwers, G., Frasincar, F., 2023. A General Survey on Attention Mechanisms in Deep Learning. IEEE Trans. Knowl. Data Eng. 35, 3279–3298. <https://doi.org/10.1109/TKDE.2021.3126456>

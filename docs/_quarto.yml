@@ -45,6 +45,12 @@ website:
             - user_guide/labels/keypoint_labels.qmd
             - user_guide/labels/segmentation_labels.qmd
             - user_guide/labels/line_labels.qmd
+        - section: "Layers"
+          href: user_guide/layers/index.qmd
+          contents:
+            - user_guide/layers/Blur2D.qmd
+            - user_guide/layers/mask_encoder.qmd
+            - user_guide/layers/sequential_coattention.qmd
         - section: "Models"
           href: user_guide/models/index.qmd
           contents:

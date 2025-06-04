@@ -7,6 +7,39 @@
     "text": "Conda install\nInstall tensorflow\nInstall Keras\nInstall Imgaug\nInstall DeepLearningUtils"
   },
   {
+    "objectID": "user_guide/layers/sequential_coattention.html",
+    "href": "user_guide/layers/sequential_coattention.html",
+    "title": "Sequential CoAttention",
+    "section": "",
+    "text": "Sequential co attention is an interesting idea but I have not had the best success with it yet. The idea is that if a query needs to be compared with a sequence of keys and values you can take the output of an attention layer and use it as the query to the next key and value in the sequence. Compare this to having an extra dimension in regular attention that would need to be flattened for a large comparison between the query and key values. I think this is most used when the sequence of things to be attended to are from different media types say audio and visual. I wondered if this could be used to have an expanded memory bank when comparing an image to multiple images in a sequence. Particularly if you are memory limited the attention operation between a query frame and sequence of key value frames can be a large Matrix operation that expands with the sequence length. Additionally, while this approach with multiple images in the same Matrix allows each image at the time of attention to inform the others, it also can be difficult to add in some sequence identity that is purely ID based but not deterministic. For example if you have a random list of memory frames that does not specify temporal order it is easy to add in temporal encoding but it is not so simple to add in sequence and coding that the network does not expect to be temporal. \nBrauwers, G., Frasincar, F., 2023. A General Survey on Attention Mechanisms in Deep Learning. IEEE Trans. Knowl. Data Eng. 35, 3279–3298. https://doi.org/10.1109/TKDE.2021.3126456",
+    "crumbs": [
+      "Layers",
+      "Sequential CoAttention"
+    ]
+  },
+  {
+    "objectID": "user_guide/layers/Blur2D.html",
+    "href": "user_guide/layers/Blur2D.html",
+    "title": "Blur2D",
+    "section": "",
+    "text": "Blur2d is an anti-aliasing down sampling layer. This implements several kinds of window functions such as rectangular triangular and binomial. The original paper on anti-aliasing convolutions demonstrated that aliasing from down sampling operations can result in poor labeling of the same image with just lateral positional shifts of that image. The best window type and size is probably application dependent. These are not just a free upgrade although I do think they are important under some circumstances. They do take additional time to implement even though they don’t have trainable parameters. Also they cause some edging effects because of the padding necessary to implement the convolution. These edging effects are going to be more apparent based on the ratio of the image size to the window size. With small encoder outputs in the deepest layers they can be quite dramatic. Consequently I think that these are best kept to initial layers.\nZhang, R., 2019. Making Convolutional Networks Shift-Invariant Again. https://doi.org/10.48550/arXiv.1904.11486",
+    "crumbs": [
+      "Layers",
+      "Blur2D"
+    ]
+  },
+  {
+    "objectID": "user_guide/layers/mask_encoder.html",
+    "href": "user_guide/layers/mask_encoder.html",
+    "title": "Mask Encoder",
+    "section": "",
+    "text": "This is the mask encoder implementation styled after Sam 2. This is designed to take a binary image label for semantic segmentation and down sample it and expand the features to merge with an encoder. I have added in anti-aliasing layers between down sampling. In sam 2, they down sample more aggressively and expand the features to match the encoder output. They then simply merge them together with addition. You can alternatively merge The mask encoder layers with any kind of merging operation you wish like concatenation and convolution. In my hands, merging with concatenation and convolution works better but that may be a result of the small sample size.\nhttps://github.com/facebookresearch/sam2/blob/main/sam2/modeling/memory_encoder.py",
+    "crumbs": [
+      "Layers",
+      "Mask Encoder"
+    ]
+  },
+  {
     "objectID": "user_guide/labels/keypoint_labels.html",
     "href": "user_guide/labels/keypoint_labels.html",
     "title": "Keypoint Labels",

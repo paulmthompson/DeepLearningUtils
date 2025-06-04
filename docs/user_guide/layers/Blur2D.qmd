@@ -1,0 +1,8 @@
+---
+title: "Blur2D"
+format: html
+---
+
+Blur2d is an anti-aliasing down sampling layer. This implements several kinds of window functions such as rectangular triangular and binomial. The original paper on anti-aliasing convolutions demonstrated that aliasing from down sampling operations can result in poor labeling of the same image with just lateral positional shifts of that image. The best window type and size is probably application dependent. These are not just a free upgrade although I do think they are important under some circumstances. They do take additional time to implement even though they don't have trainable parameters. Also they cause some edging effects because of the padding necessary to implement the convolution. These edging effects are going to be more apparent based on the ratio of the image size to the window size. With small encoder outputs in the deepest layers they can be quite dramatic. Consequently I think that these are best kept to initial layers.
+
+Zhang, R., 2019. Making Convolutional Networks Shift-Invariant Again. <https://doi.org/10.48550/arXiv.1904.11486>

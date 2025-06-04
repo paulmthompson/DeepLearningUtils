@@ -37,5 +37,17 @@
   },
   "user_guide/labels/line_labels.qmd": {
     "line_labels.html": "e7000807"
+  },
+  "user_guide/layers/Blur2D.qmd": {
+    "Blur2D.html": "a3e901b0"
+  },
+  "user_guide/layers/index.qmd": {
+    "index.html": "4897246f"
+  },
+  "user_guide/layers/sequential_coattention.qmd": {
+    "sequential_coattention.html": "e5fd4b3e"
+  },
+  "user_guide/layers/mask_encoder.qmd": {
+    "mask_encoder.html": "1d9da0c1"
   }
 }

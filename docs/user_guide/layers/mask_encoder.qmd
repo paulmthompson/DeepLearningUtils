@@ -1,0 +1,8 @@
+---
+title: "Mask Encoder"
+format: html
+---
+
+This is the mask encoder implementation styled after Sam 2. This is designed to take a binary image label for semantic segmentation and down sample it and expand the features to merge with an encoder. I have added in anti-aliasing layers between down sampling. In sam 2, they down sample more aggressively and expand the features to match the encoder output. They then simply merge them together with addition. You can alternatively merge The mask encoder layers with any kind of merging operation you wish like concatenation and convolution. In my hands, merging with concatenation and convolution works better but that may be a result of the small sample size.
+
+<https://github.com/facebookresearch/sam2/blob/main/sam2/modeling/memory_encoder.py>
