@@ -1,0 +1,20 @@
+[
+  {
+    "objectID": "how_to_guides/installation.html",
+    "href": "how_to_guides/installation.html",
+    "title": "Installation",
+    "section": "",
+    "text": "Conda install\nInstall tensorflow\nInstall Keras\nInstall Imgaug\nInstall DeepLearningUtils"
+  },
+  {
+    "objectID": "user_guide/labels/keypoint_labels.html",
+    "href": "user_guide/labels/keypoint_labels.html",
+    "title": "Keypoint Labels",
+    "section": "",
+    "text": "Data format\nData_Folder\nData_Folder\n├── 0125_1_2\n│   ├── images\n│   │   ├── 104000.png\n│   │   └── 95796.png\n│   └── labels\n│       └── pole\n│           └── pole_training.csv\n├── 050924_1\n│   ├── images\n│   │   ├── 104000.png\n│   │   └── 93556.png\n│   └── labels\n│       └── pole\n│           └── pole_training.csv\n├── 071024_4589\nInside the Data_Folder should be folders corresponding to each experiment where training data is coming from. Each of these folders should include a folder images and labels. The images folder should include images of frames for training. The names should be the frame numbers. The labels folder should contain folders where each folder corresponds to the name of a label. For keypoint labels, the content of that file should be a CSV file.\nThe pole training file has the following format:\n\n\n\nFrame\nX\nY\n\n\n\n\n104000\n106\n424\n\n\n104001\n106\n424\n\n\n\nThe frame entry name should match the name of the image file. The X and Y values correspond to the X and Y values of the keypoint in the frame.",
+    "crumbs": [
+      "Labels",
+      "Keypoint Labels"
+    ]
+  }
+]

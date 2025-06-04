@@ -7,7 +7,7 @@ Data format
 
 Data_Folder
 
-```{}
+```         
 Data_Folder
 ├── 0125_1_2
 │   ├── images
@@ -24,7 +24,6 @@ Data_Folder
 │       └── pole
 │           └── pole_training.csv
 ├── 071024_4589
-
 ```
 
 Inside the Data_Folder should be folders corresponding to each experiment where training data is coming from. Each of these folders should include a folder **images** and **labels**. The **images** folder should include images of frames for training. The names should be the frame numbers. The labels folder should contain folders where each folder corresponds to the name of a label. For keypoint labels, the content of that file should be a CSV file.

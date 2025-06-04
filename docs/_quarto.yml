@@ -1,5 +1,6 @@
 project:
   type: website
+  output-dir: .
 
 website:
   title: "Deep Learning Utilities" # Title of the website
@@ -43,11 +44,13 @@ website:
           contents:
             - user_guide/labels/keypoint_labels.qmd
             - user_guide/labels/segmentation_labels.qmd
+            - user_guide/labels/line_labels.qmd
         - section: "Models"
           href: user_guide/models/index.qmd
           contents:
             - user_guide/models/keypoint_detector.qmd
             - user_guide/models/segmentation_model.qmd
+            - user_guide/models/line_model.qmd
 
 format:
   html:

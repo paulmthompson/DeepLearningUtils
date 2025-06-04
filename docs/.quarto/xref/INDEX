@@ -31,5 +31,11 @@
   },
   "index.qmd": {
     "index.html": "81cb2b8a"
+  },
+  "user_guide/models/line_model.qmd": {
+    "line_model.html": "0a8492d0"
+  },
+  "user_guide/labels/line_labels.qmd": {
+    "line_labels.html": "e7000807"
   }
 }
