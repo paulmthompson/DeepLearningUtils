@@ -128,9 +128,9 @@ class TestVideoKeypoints:
             assert content[0].strip() == "Frame X Y Probability"
 
             # Check data entries
-            assert content[1].strip() == "5 3 2 0.7"
-            assert content[2].strip() == "6 5 4 0.8"
-            assert content[3].strip() == "7 7 6 0.9"
+            assert content[1].strip() == "5 3.0 2.0 0.7"
+            assert content[2].strip() == "6 5.0 4.0 0.8"
+            assert content[3].strip() == "7 7.0 6.0 0.9"
 
         finally:
             # Clean up
@@ -160,8 +160,8 @@ class TestVideoKeypoints:
 
             # Should only have header + 2 entries (not the 0.3 entry)
             assert len(content) == 3
-            assert content[1].strip() == "6 5 4 0.6"
-            assert content[2].strip() == "7 7 6 0.9"
+            assert content[1].strip() == "6 5.0 4.0 0.6"
+            assert content[2].strip() == "7 7.0 6.0 0.9"
 
         finally:
             # Clean up

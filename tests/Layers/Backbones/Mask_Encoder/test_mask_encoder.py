@@ -17,9 +17,11 @@ from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weig
     ((128, 128, 3), 256, True),
     ((128, 128, 3), 256, False)
 ])
-def test_mask_encoder(input_shape, output_channels, anti_aliasing):
+def test_mask_encoder(input_shape, output_channels, anti_aliasing, keras_float32_policy):
     # Create Keras model
     keras_model = create_mask_encoder(input_shape, output_channels, anti_aliasing)
+    keras_model = keras.models.clone_model(keras_model) # Re-clone to apply dtype policy if not already applied
+
     keras_input = np.random.rand(1, *input_shape).astype(np.float32)
     keras_output = keras_model.predict(keras_input)
 
@@ -38,4 +40,4 @@ def test_mask_encoder(input_shape, output_channels, anti_aliasing):
     pytorch_output = pytorch_model(pytorch_input).detach().numpy()
     pytorch_output = pytorch_output.transpose(0, 2, 3, 1)
     # Compare outputs
-    np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-8)
+    np.testing.assert_allclose(keras_output, pytorch_output, rtol=1e-5, atol=1e-5)

@@ -23,7 +23,7 @@ from src.DeepLearningUtils.Layers.Backbones.Memory_Encoder.memory_encoder_pytorc
     ((3, 256, 256), 256, 1, True, 'add'),
     ((3, 256, 256), 256, 5, False, 'add')
 ])
-def test_memory_encoder(input_shape, output_channels, seq_len, anti_aliasing, combine_operation):
+def test_memory_encoder(input_shape, output_channels, seq_len, anti_aliasing, combine_operation, keras_float32_policy):
     # Create Keras EfficientViT model
 
     use_norm = True
@@ -54,7 +54,7 @@ def test_memory_encoder(input_shape, output_channels, seq_len, anti_aliasing, co
     keras_input = np.random.rand(1, seq_len, *keras_input_shape).astype(np.float32)
     keras_mask_input = np.random.rand(1, seq_len, input_shape[1], input_shape[2], 1).astype(np.float32)
     keras_memory_encoder.trainable = False
-    keras_output = keras_memory_encoder([keras_input, keras_mask_input], training=False).detach().numpy()
+    keras_output = keras_memory_encoder([keras_input, keras_mask_input], training=False).numpy()
 
     # Create PyTorch EfficientViT model
     pytorch_efficientvit = EfficientViT_PyTorch(

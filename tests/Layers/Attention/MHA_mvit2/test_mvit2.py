@@ -25,7 +25,7 @@ def reshape_input(input_data):
     ((1, 8, 8, 64), (1, 8, 8, 64), 128, 128, 8, 0.0),
     ((2, 16, 16, 128), (2, 8, 8, 128), 256, 256, 4, 0.0)
 ])
-def test_multihead_attention(query_shape, key_shape, value_dim, key_dim, heads, drop_rate):
+def test_multihead_attention(query_shape, key_shape, value_dim, key_dim, heads, drop_rate, keras_float32_policy):
 
     query_seq_len, query_height, query_width, _ = query_shape
     key_seq_len, key_height, key_width, _ = key_shape
@@ -74,7 +74,7 @@ def test_multihead_attention(query_shape, key_shape, value_dim, key_dim, heads, 
     keras_output = keras_layer(keras_input_query, keras_input_key, keras_input_value, mask=mask)
     # Create PyTorch layer
 
-    keras_output = keras_output.detach().numpy()
+    keras_output = keras_output.numpy()
     torch_layer = TorchMultiHeadAttention(
         query_shape,
         key_shape,

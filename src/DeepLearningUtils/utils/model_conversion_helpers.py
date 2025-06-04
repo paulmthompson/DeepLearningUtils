@@ -23,9 +23,9 @@ def get_keras_weights_by_name(keras_layer):
         name = path.split('/')[-2]
         print(path)
         if name not in weights_by_layer:
-            weights_by_layer[name] = [weight.value.cpu().detach().numpy()]
+            weights_by_layer[name] = [weight.value.numpy()]
         else:
-            weights_by_layer[name].append(weight.value.cpu().detach().numpy())
+            weights_by_layer[name].append(weight.value.numpy())
 
     return weights_by_layer
 

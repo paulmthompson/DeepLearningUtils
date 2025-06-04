@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 from tqdm import tqdm
+import keras
 
 from src.DeepLearningUtils.DataStructures.Masks.sparse_mask import SparseVideoMask
 from src.DeepLearningUtils.utils.video.video_opencv import get_total_frames, get_video_height_width
@@ -208,7 +209,7 @@ def prediction_loop(
     ----------
     batch_size : int
         Number of frames to process in each batch
-    model : tf.keras.Model
+    model : keras.Model
         Trained model for line segmentation
     video_path : str
         Path to video file

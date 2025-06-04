@@ -8,6 +8,7 @@ class UNetDecoder(keras.layers.Layer):
                  filter_sizes,
                  activation='relu',
                  transpose=False,
+                 use_norm=True,
                  accum_steps=1,
                  **kwargs):
         super(UNetDecoder, self).__init__(**kwargs)
@@ -25,15 +26,18 @@ class UNetDecoder(keras.layers.Layer):
                 (3, 3),
                 padding='same',
                 name=f'conv_layers_{i}'))
-            if accum_steps > 1:
-                self.bn_layers.append(AccumBatchNormalization(
-                    accum_steps=accum_steps,
-                    momentum=0.9,
-                    name=f'bn_layers_{i}'))
+            if use_norm:
+                if accum_steps > 1:
+                    self.bn_layers.append(AccumBatchNormalization(
+                        accum_steps=accum_steps,
+                        momentum=0.9,
+                        name=f'bn_layers_{i}'))
+                else:
+                    self.bn_layers.append(keras.layers.BatchNormalization(
+                        momentum=0.9,
+                        name=f'bn_layers_{i}'))
             else:
-                self.bn_layers.append(keras.layers.BatchNormalization(
-                    momentum=0.9,
-                    name=f'bn_layers_{i}'))
+                self.bn_layers.append(keras.layers.Lambda(lambda x: x, name=f'bn_layers_{i}'))
             self.activation_layers.append(keras.layers.Activation(
                 activation,
                 name=f'activation_layers_{i}'))

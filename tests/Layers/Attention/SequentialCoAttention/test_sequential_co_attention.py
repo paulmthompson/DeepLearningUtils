@@ -22,7 +22,7 @@ from src.DeepLearningUtils.Layers.Attention.SequentialCoAttention.sequential_co_
     ((1, 256, 16, 16), 5, 128, 128),
     ((1, 256, 8, 8), 10, 128, 128)
 ])
-def test_coattention_module(input_shape, n_frames, key_dim, value_dim):
+def test_coattention_module(input_shape, n_frames, key_dim, value_dim, keras_float32_policy):
     # Create Keras CoAttentionModule
     keras_memory_attention_module = CoMemoryAttentionModule_Keras(
         key_dim,
@@ -43,7 +43,7 @@ def test_coattention_module(input_shape, n_frames, key_dim, value_dim):
     keras_input = np.random.rand(*keras_input_shape).astype(np.float32)
     keras_memory_bank = np.random.rand(input_shape[0], n_frames, *keras_input_shape[2:]).astype(np.float32)
     keras_mask = np.ones((input_shape[0], n_frames)).astype(np.float32)
-    keras_output = keras_coattention([keras_input, keras_memory_bank, keras_mask]).detach().numpy()
+    keras_output = keras_coattention([keras_input, keras_memory_bank, keras_mask]).numpy()
 
     # Create PyTorch CoAttentionModule
     pytorch_memory_attention_module = CoMemoryAttentionModule_PyTorch(
