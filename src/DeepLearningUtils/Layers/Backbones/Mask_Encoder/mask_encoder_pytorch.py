@@ -15,7 +15,7 @@ class MaskEncoder(nn.Module):
 
         if anti_aliasing:
             self.conv1 = Conv2dSame(input_channels, 4, kernel_size=2, stride=1)
-            self.blur1 = Blur2D(5, 2, "Binomial", padding="same")
+            self.blur1 = Blur2D(kernel_size=5, stride=2, kernel_type="Binomial", padding="same")
         else:
             self.conv1 = Conv2dSame(input_channels, 4, kernel_size=2, stride=2)
             self.blur1 = nn.Identity()
@@ -25,8 +25,8 @@ class MaskEncoder(nn.Module):
 
         if anti_aliasing:
             self.conv2 = Conv2dSame(4, 64, kernel_size=4, stride=1)
-            self.blur2_1 = Blur2D(3, 2, "Triangle", padding="same")
-            self.blur2_2 = Blur2D(3, 2, "Triangle", padding="same")
+            self.blur2_1 = Blur2D(kernel_size=3, stride=2, kernel_type="Triangle", padding="same")
+            self.blur2_2 = Blur2D(kernel_size=3, stride=2, kernel_type="Triangle", padding="same")
         else:
             self.conv2 = Conv2dSame(4, 64, kernel_size=4, stride=4)
             self.blur2_1 = nn.Identity()
