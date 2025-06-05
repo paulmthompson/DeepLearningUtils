@@ -76,14 +76,15 @@ def test_multihead_attention(query_shape, key_shape, value_dim, key_dim, heads, 
 
     keras_output = keras_output.numpy()
     torch_layer = TorchMultiHeadAttention(
-        query_shape,
-        key_shape,
+        query_shape=query_shape,
+        key_shape=key_shape,
         heads=heads,
         value_dim=value_dim,
         key_dim=key_dim,
         attention_drop_rate=drop_rate,
         use_positional_embedding=use_positional_embedding,
-        use_key_positional_embedding=use_positional_embedding)
+        use_key_positional_embedding=use_positional_embedding
+    )
     torch_layer.eval()
 
     # Load weights from Keras to PyTorch

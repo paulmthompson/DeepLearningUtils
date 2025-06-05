@@ -115,7 +115,7 @@ class CoMemoryAttentionModule(nn.Module):
 
         self.att = MultiHeadAttention(
             query_shape=query_shape,
-            memory_shape=memory_shape,
+            key_shape=memory_shape,
             heads=self.attention_heads,
             value_dim=self.value_dim,
             key_dim=self.key_dim,
