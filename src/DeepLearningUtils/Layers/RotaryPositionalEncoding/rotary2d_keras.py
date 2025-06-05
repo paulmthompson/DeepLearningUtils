@@ -229,8 +229,8 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
         # y-frequencies: coordinate * base_freqs for second half  
         freqs_y = keras.ops.expand_dims(t_y, -1) @ keras.ops.expand_dims(base_freqs_repeated, 0)  # (hw, dim//2)
         
-        # Concatenate to form full frequency matrix
-        freqs_combined = keras.ops.concatenate([freqs_x, freqs_y], axis=-1)  # (hw, dim)
+        # Concatenate to form full frequency matrix (y-freqs first to match PyTorch)
+        freqs_combined = keras.ops.concatenate([freqs_y, freqs_x], axis=-1)  # (hw, dim)
         freqs_combined = keras.ops.cast(freqs_combined, "float32")
         
         # Apply rotary embedding using the combined frequencies

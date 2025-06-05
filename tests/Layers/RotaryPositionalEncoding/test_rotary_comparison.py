@@ -59,7 +59,8 @@ class TestRotaryPositionalEncodingComparison:
         height: int, 
         width: int, 
         dim: int, 
-        theta: float = 10000
+        theta: float = 10000,
+        pytorch_rotary: PyTorchRotaryEmbedding = None
     ) -> torch.Tensor:
         """
         Apply 2D rotary embeddings using PyTorch implementation.
@@ -70,6 +71,7 @@ class TestRotaryPositionalEncodingComparison:
             width: Width of 2D spatial grid.
             dim: Feature dimension.
             theta: Theta parameter for frequency computation.
+            pytorch_rotary: PyTorch rotary embedding object.
             
         Returns:
             Tensor with rotary embeddings applied.
@@ -78,11 +80,14 @@ class TestRotaryPositionalEncodingComparison:
         
         # CRITICAL: For 2D rotary, create RotaryEmbedding with dim//2
         # This is because get_axial_freqs concatenates x and y frequencies
-        rotary_emb = PyTorchRotaryEmbedding(
-            dim=dim//2,  # Half dimension for 2D axial frequencies
-            freqs_for='lang',
-            theta=theta
-        )
+        if pytorch_rotary is None:
+            pytorch_rotary = PyTorchRotaryEmbedding(
+                dim=dim//2,  # Half dimension for 2D axial frequencies
+                freqs_for='lang',
+                theta=theta
+            )
+        
+        rotary_emb = pytorch_rotary
         
         # Get 2D axial frequencies for height and width
         freqs_2d = rotary_emb.get_axial_freqs(height, width)  # Shape: (height, width, dim)
@@ -438,6 +443,156 @@ class TestRotaryPositionalEncodingComparison:
         print(f"freqs_combined values:")
         for i in range(height * width):
             print(f"  Position {i}: {keras.ops.convert_to_numpy(freqs_combined[i])}")
+
+    def test_exact_output_equivalence_with_same_weights(self) -> None:
+        """Test exact equivalence between Keras and PyTorch with identical weights."""
+        dim = 8
+        height, width = 2, 2
+        theta = 10000
+        
+        # Create deterministic input
+        torch.manual_seed(42)
+        np.random.seed(42)
+        batch_size, seq_len = 1, 1
+        test_input = np.random.randn(batch_size, seq_len, height * width, dim).astype(np.float32)
+        
+        # Create Keras layer
+        keras_layer = KerasRotaryPositionalEncoding2D(
+            dim=dim, height=height, width=width, theta=theta, rotate=False
+        )
+        keras_tensor = keras.ops.convert_to_tensor(test_input)
+        
+        # Build layer to initialize weights
+        keras_layer.build((batch_size, seq_len, height * width, dim))
+        
+        # Create PyTorch layer with same base frequencies
+        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='lang', theta=theta)
+        
+        # Copy Keras base frequencies to PyTorch
+        keras_base_freqs = keras.ops.convert_to_numpy(keras_layer.base_freqs)
+        pytorch_rotary.freqs.data = torch.tensor(keras_base_freqs, dtype=torch.float32)
+        
+        print(f"Keras base frequencies: {keras_base_freqs}")
+        print(f"PyTorch base frequencies: {pytorch_rotary.freqs.detach().numpy()}")
+        
+        # Apply both implementations
+        keras_output = keras.ops.convert_to_numpy(keras_layer(keras_tensor))
+        
+        torch_tensor = torch.from_numpy(test_input)
+        torch_output = self._apply_pytorch_2d_rotary(
+            torch_tensor, height, width, dim, theta=theta, pytorch_rotary=pytorch_rotary
+        ).detach().numpy()
+        
+        # Quantitative analysis
+        max_diff = np.max(np.abs(keras_output - torch_output))
+        mean_diff = np.mean(np.abs(keras_output - torch_output))
+        std_diff = np.std(keras_output - torch_output)
+        
+        print(f"\n=== Quantitative Comparison ===")
+        print(f"Input shape: {test_input.shape}")
+        print(f"Max absolute difference: {max_diff}")
+        print(f"Mean absolute difference: {mean_diff}")
+        print(f"Standard deviation of differences: {std_diff}")
+        
+        # Test different tolerance levels
+        tolerances = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7]
+        for tol in tolerances:
+            is_close = np.allclose(keras_output, torch_output, rtol=tol, atol=tol)
+            print(f"np.allclose with rtol=atol={tol}: {is_close}")
+        
+        # Detailed position-by-position analysis
+        print(f"\n=== Position-by-Position Analysis ===")
+        for pos in range(height * width):
+            pos_diff = np.abs(keras_output[0, 0, pos, :] - torch_output[0, 0, pos, :])
+            pos_max_diff = np.max(pos_diff)
+            pos_mean_diff = np.mean(pos_diff)
+            
+            x_coord, y_coord = pos % width, pos // width
+            print(f"Position {pos} ({x_coord},{y_coord}): max_diff={pos_max_diff:.2e}, mean_diff={pos_mean_diff:.2e}")
+            
+            # Show values for positions with significant differences
+            if pos_max_diff > 1e-6:
+                print(f"  Keras:   {keras_output[0, 0, pos, :]}")
+                print(f"  PyTorch: {torch_output[0, 0, pos, :]}")
+                print(f"  Diff:    {keras_output[0, 0, pos, :] - torch_output[0, 0, pos, :]}")
+        
+        # Overall assessment
+        if max_diff < 1e-6:
+            print(f"\n✅ EXCELLENT: Implementations are virtually identical (max diff: {max_diff:.2e})")
+        elif max_diff < 1e-3:
+            print(f"\n🟡 GOOD: Implementations are very close (max diff: {max_diff:.2e})")
+        else:
+            print(f"\n🔴 NEEDS WORK: Significant differences remain (max diff: {max_diff:.2e})")
+        
+        # Store results for inspection
+        self.comparison_results = {
+            'max_diff': max_diff,
+            'mean_diff': mean_diff,
+            'std_diff': std_diff,
+            'keras_output': keras_output,
+            'pytorch_output': torch_output,
+            'input': test_input
+        }
+
+    def test_debug_frequency_patterns(self) -> None:
+        """Debug the exact frequency patterns being applied at each position."""
+        dim = 8
+        height, width = 2, 2
+        theta = 10000
+        
+        # Create Keras layer
+        keras_layer = KerasRotaryPositionalEncoding2D(
+            dim=dim, height=height, width=width, theta=theta, rotate=False
+        )
+        
+        # Build layer to initialize weights
+        keras_layer.build((1, 1, height * width, dim))
+        
+        # Get Keras frequency computation details
+        t_x, t_y = keras_layer._init_spatial_coordinates()
+        base_freqs_repeated = keras.ops.repeat(keras_layer.base_freqs, 2)
+        
+        freqs_x = keras.ops.expand_dims(t_x, -1) @ keras.ops.expand_dims(base_freqs_repeated, 0)
+        freqs_y = keras.ops.expand_dims(t_y, -1) @ keras.ops.expand_dims(base_freqs_repeated, 0)
+        freqs_combined = keras.ops.concatenate([freqs_x, freqs_y], axis=-1)
+        
+        # Create PyTorch layer with same base frequencies
+        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='lang', theta=theta)
+        pytorch_rotary.freqs.data = torch.tensor(keras.ops.convert_to_numpy(keras_layer.base_freqs), dtype=torch.float32)
+        
+        # Get PyTorch axial frequencies
+        pytorch_freqs_2d = pytorch_rotary.get_axial_freqs(height, width)
+        pytorch_freqs_flat = pytorch_freqs_2d.view(height * width, -1)
+        
+        print(f"=== Base Frequencies ===")
+        print(f"Keras base_freqs: {keras.ops.convert_to_numpy(keras_layer.base_freqs)}")
+        print(f"PyTorch base_freqs: {pytorch_rotary.freqs.detach().numpy()}")
+        print(f"base_freqs_repeated: {keras.ops.convert_to_numpy(base_freqs_repeated)}")
+        
+        print(f"\n=== Spatial Coordinates ===")
+        print(f"t_x: {keras.ops.convert_to_numpy(t_x)}")
+        print(f"t_y: {keras.ops.convert_to_numpy(t_y)}")
+        
+        print(f"\n=== Keras Frequency Application ===")
+        for pos in range(height * width):
+            x_coord, y_coord = pos % width, pos // width
+            keras_freq_vec = keras.ops.convert_to_numpy(freqs_combined[pos])
+            pytorch_freq_vec = pytorch_freqs_flat[pos].detach().numpy()
+            
+            print(f"\nPosition {pos} ({x_coord},{y_coord}):")
+            print(f"  Keras frequencies:   {keras_freq_vec}")
+            print(f"  PyTorch frequencies: {pytorch_freq_vec}")
+            print(f"  Difference:          {keras_freq_vec - pytorch_freq_vec}")
+            
+            # Break down Keras computation
+            print(f"  Keras freqs_x[{pos}]:   {keras.ops.convert_to_numpy(freqs_x[pos])}")
+            print(f"  Keras freqs_y[{pos}]:   {keras.ops.convert_to_numpy(freqs_y[pos])}")
+        
+        print(f"\n=== PyTorch 2D Frequency Structure ===")
+        for y in range(height):
+            for x in range(width):
+                freq_vec = pytorch_freqs_2d[y, x].detach().numpy()
+                print(f"PyTorch freqs_2d[{y},{x}]: {freq_vec}")
 
 
 if __name__ == "__main__":
