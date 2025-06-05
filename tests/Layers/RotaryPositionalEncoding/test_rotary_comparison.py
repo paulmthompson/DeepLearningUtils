@@ -148,17 +148,17 @@ class TestRotaryPositionalEncodingComparison:
 
     def test_pytorch_axial_frequencies(self) -> None:
         """Test PyTorch axial frequency generation and structure."""
-        dim = 4
+        dim = 8  # Use dim=8 to avoid division by zero in PyTorch
         height, width = 2, 2
         
-        # Create PyTorch rotary embedding
-        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim, freqs_for='lang', theta=10000)
+        # Create PyTorch rotary embedding (use dim//2 since get_axial_freqs concatenates x+y)
+        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='lang', theta=10000)
         
         # Get axial frequencies
         freqs_2d = pytorch_rotary.get_axial_freqs(height, width)
         
         # Test basic properties
-        assert freqs_2d.shape == (height, width, 2 * dim)
+        assert freqs_2d.shape == (height, width, dim)  # PyTorch returns concatenated axial freqs
         
         # Test that different spatial positions have different frequencies
         pos_00 = freqs_2d[0, 0]  # Should be zeros (origin)
@@ -199,10 +199,10 @@ class TestRotaryPositionalEncodingComparison:
         
         # Build the layer to initialize frequencies
         keras_layer.build((1, 1, height * width, dim))
-        keras_freqs = keras.ops.convert_to_numpy(keras_layer.freqs)
+        keras_freqs = keras.ops.convert_to_numpy(keras_layer.base_freqs)
         
-        # Create PyTorch embedding and get frequencies
-        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim, freqs_for='pixel', theta=theta, max_freq=10)
+        # Create PyTorch embedding and get frequencies (use dim//2 since get_axial_freqs concatenates x+y)
+        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='pixel', theta=theta, max_freq=10)
         pytorch_freqs_2d = pytorch_rotary.get_axial_freqs(height, width)
         pytorch_freqs = pytorch_freqs_2d.detach().numpy()
         
@@ -212,7 +212,7 @@ class TestRotaryPositionalEncodingComparison:
         
         # For now, just ensure they have reasonable magnitudes
         # TODO: Implement proper frequency comparison once we understand the exact mapping
-        assert keras_freqs.shape == (2, dim // 2)
+        assert keras_freqs.shape == (dim // 4,)  # Base frequencies for axial concatenation
         assert pytorch_freqs.shape == (height, width, dim)
 
     def test_output_shape_preservation(self) -> None:
@@ -252,7 +252,7 @@ class TestRotaryPositionalEncodingComparison:
     @pytest.mark.parametrize("theta", [1000, 10000, 100000])
     def test_different_theta_values(self, theta: float) -> None:
         """Test that different theta values work correctly in both implementations."""
-        batch_size, seq_len, height, width, dim = 1, 1, 2, 2, 4
+        batch_size, seq_len, height, width, dim = 1, 1, 2, 2, 8  # Use dim=8 to avoid division by zero
         
         keras_tensor, torch_tensor = self._create_test_tensor(batch_size, seq_len, height, width, dim)
         
@@ -274,7 +274,7 @@ class TestRotaryPositionalEncodingComparison:
 
     def test_basic_setup(self) -> None:
         """Test basic setup works for both implementations."""
-        dim = 4
+        dim = 8  # Use dim=8 to avoid division by zero in PyTorch
         height, width = 2, 2
         
         # Test Keras layer creation
@@ -283,8 +283,8 @@ class TestRotaryPositionalEncodingComparison:
         assert keras_layer.height == height
         assert keras_layer.width == width
         
-        # Test PyTorch embedding creation
-        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim, freqs_for='pixel')
+        # Test PyTorch embedding creation (use dim//2 since get_axial_freqs concatenates x+y)
+        pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='pixel')
         assert pytorch_rotary is not None
 
     def test_frequency_shapes(self) -> None:
@@ -300,7 +300,7 @@ class TestRotaryPositionalEncodingComparison:
 
         # Build the layer to initialize frequencies
         keras_layer.build((1, 1, height * width, dim))
-        keras_freqs = keras.ops.convert_to_numpy(keras_layer.freqs)
+        keras_freqs = keras.ops.convert_to_numpy(keras_layer.base_freqs)
 
         # Create PyTorch embedding with correct dimension for 2D
         pytorch_rotary = PyTorchRotaryEmbedding(dim=dim//2, freqs_for='lang', theta=theta)
@@ -308,7 +308,7 @@ class TestRotaryPositionalEncodingComparison:
         pytorch_freqs = pytorch_freqs_2d.detach().numpy()
 
         # Check shapes
-        assert keras_freqs.shape == (2, dim // 2)
+        assert keras_freqs.shape == (dim // 4,)  # Base frequencies for axial concatenation
         assert pytorch_freqs.shape == (height, width, dim)  # Corrected expectation
 
         print(f"Keras freqs shape: {keras_freqs.shape}")
