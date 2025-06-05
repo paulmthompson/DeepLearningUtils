@@ -1,5 +1,3 @@
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -116,8 +114,8 @@ class CoMemoryAttentionModule(nn.Module):
             self.memory_norm = nn.Identity()
 
         self.att = MultiHeadAttention(
-            query_shape,
-            memory_shape,
+            query_shape=query_shape,
+            memory_shape=memory_shape,
             heads=self.attention_heads,
             value_dim=self.value_dim,
             key_dim=self.key_dim,

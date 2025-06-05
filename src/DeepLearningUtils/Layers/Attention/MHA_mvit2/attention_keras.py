@@ -57,10 +57,10 @@ class DotProductAttention(keras.layers.Layer):
 
         if self.use_positional_embedding:
             self.query_positional_embedding = RelativePositionalEmbedding2D(
-                (self.query_seq_len, self.query_height, self.query_width, query_shape[-1]),
-                (self.key_seq_len, self.key_height, self.key_width, key_shape[-1]),
-                query_shape[-1],
-                self.heads,
+                query_shape=(self.query_seq_len, self.query_height, self.query_width, query_shape[-1]),
+                key_shape=(self.key_seq_len, self.key_height, self.key_width, key_shape[-1]),
+                query_dim=query_shape[-1],
+                heads=self.heads,
                 drop_rate=self.drop_rate,
                 name=f"Query_Embedding_{self.name}"
             )
@@ -70,10 +70,10 @@ class DotProductAttention(keras.layers.Layer):
 
         if self.use_key_positional_embedding:
             self.key_positional_embedding = RelativePositionalEmbedding2DKey(
-                (self.query_seq_len, self.query_height, self.query_width, query_shape[-1]),
-                (self.key_seq_len, self.key_height, self.key_width, key_shape[-1]),
-                query_shape[-1],
-                self.heads,
+                query_shape=(self.query_seq_len, self.query_height, self.query_width, query_shape[-1]),
+                key_shape=(self.key_seq_len, self.key_height, self.key_width, key_shape[-1]),
+                query_dim=query_shape[-1],
+                heads=self.heads,
                 drop_rate=self.drop_rate,
                 name=f"Key_Embedding_{self.name}"
             )

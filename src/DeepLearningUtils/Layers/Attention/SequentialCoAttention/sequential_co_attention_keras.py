@@ -169,8 +169,8 @@ class CoMemoryAttentionModule(keras.layers.Layer):
         # self.residual_path = keras.layers.Dense(encoder_output[-1], 3, padding="same")
 
         self.att = MultiHeadAttention(
-            (self.query_seq_len, self.h, self.w),
-            (self.key_seq_len, self.key_height, self.key_width),
+            query_shape=(self.query_seq_len, self.h, self.w),
+            key_shape=(self.key_seq_len, self.key_height, self.key_width),
             h=self.attention_heads,
             value_dim=self.value_dim,
             key_dim=self.key_dim,

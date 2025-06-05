@@ -25,7 +25,13 @@ from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weig
 ])
 def test_positional_embedding_layer(query_shape, key_shape, query_dim, heads, drop_rate):
     # Create Keras layer
-    keras_layer = KerasRelativePositionalEmbedding2D(query_shape, key_shape, query_dim, heads, drop_rate)
+    keras_layer = KerasRelativePositionalEmbedding2D(
+        query_shape=query_shape,
+        key_shape=key_shape,
+        query_dim=query_dim,
+        heads=heads,
+        drop_rate=drop_rate
+    )
 
     batch_size = 1
     query_seq_len, query_height, query_width, _ = query_shape
@@ -42,7 +48,13 @@ def test_positional_embedding_layer(query_shape, key_shape, query_dim, heads, dr
     keras_output = keras.ops.convert_to_numpy(keras_layer([keras_input_query, keras_input_scores]))
 
     # Create PyTorch layer
-    torch_layer = TorchRelativePositionalEmbedding2D(query_shape, key_shape, query_dim, heads, drop_rate)
+    torch_layer = TorchRelativePositionalEmbedding2D(
+        query_shape=query_shape,
+        key_shape=key_shape,
+        query_dim=query_dim,
+        heads=heads,
+        drop_rate=drop_rate
+    )
     torch_layer.eval()
     # Load weights from Keras to PyTorch
     custom_loaders = {'RelativePositionalEmbedding2D': load_positionaL_embedding_layer_weights}

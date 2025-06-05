@@ -22,7 +22,13 @@ from src.DeepLearningUtils.utils.model_conversion_helpers import load_keras_weig
 ])
 def test_positional_embedding_layer_key(query_shape, key_shape, query_dim, heads, drop_rate):
     # Create Keras layer
-    keras_layer = KerasRelativePositionalEmbedding2DKey(query_shape, key_shape, query_dim, heads, drop_rate)
+    keras_layer = KerasRelativePositionalEmbedding2DKey(
+        query_shape=query_shape,
+        key_shape=key_shape,
+        query_dim=query_dim,
+        heads=heads,
+        drop_rate=drop_rate
+    )
     batch_size = 1
     key_seq_len, key_height, key_width, _ = key_shape
     query_seq_len, query_height, query_width, _ = query_shape
@@ -38,7 +44,13 @@ def test_positional_embedding_layer_key(query_shape, key_shape, query_dim, heads
     keras_output = keras_model.predict([keras_input_key, keras_input_scores])
 
     # Create PyTorch layer
-    torch_layer = TorchRelativePositionalEmbedding2DKey(query_shape, key_shape, query_dim, heads, drop_rate)
+    torch_layer = TorchRelativePositionalEmbedding2DKey(
+        query_shape=query_shape,
+        key_shape=key_shape,
+        query_dim=query_dim,
+        heads=heads,
+        drop_rate=drop_rate
+    )
     torch_layer.eval()
 
     # Load weights from Keras to PyTorch

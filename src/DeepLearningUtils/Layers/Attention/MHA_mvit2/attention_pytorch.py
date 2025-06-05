@@ -42,20 +42,20 @@ class DotProductAttention(nn.Module):
         self.query_positional_embedding = nn.ModuleDict()
         if self.use_positional_embedding:
             self.query_positional_embedding[f"Query_Embedding_{name}"] = RelativePositionalEmbedding2D(
-                query_shape,
-                memory_shape,
-                query_dim,
-                self.heads,
-                drop_rate=self.drop_rate,
+                query_shape=query_shape,
+                key_shape=memory_shape,
+                query_dim=query_dim,
+                heads=self.heads,
+                drop_rate=self.drop_rate
             )
 
         self.key_positional_embedding = nn.ModuleDict()
         if self.use_key_positional_embedding:
             self.key_positional_embedding[f"Key_Embedding_{name}"] = RelativePositionalEmbedding2DKey(
-                query_shape,
-                memory_shape,
-                query_dim,
-                self.heads,
+                query_shape=query_shape,
+                key_shape=memory_shape,
+                query_dim=query_dim,
+                heads=self.heads,
                 drop_rate=self.drop_rate
             )
 

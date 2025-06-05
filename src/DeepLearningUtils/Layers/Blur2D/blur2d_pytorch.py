@@ -113,7 +113,7 @@ class Blur2D(nn.Module):
     def _calc_same_pad(self, i: int, k: int, s: int) -> int:
         """Calculate padding for 'same' mode. JIT-compatible version."""
         return max((math.ceil(i / s) - 1) * s + (k - 1) + 1 - i, 0)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Apply blur and downsampling to input tensor.
@@ -145,12 +145,12 @@ class Blur2D(nn.Module):
         
         # Expand kernel to match number of input channels for depthwise convolution
         kernel = self.kernel2d.repeat(channels, 1, 1, 1).to(x.device)
-        
+
         # Handle padding
         if self.padding_same:
             pad_h = self._calc_same_pad(height, self.kernel_size, self.stride)
             pad_w = self._calc_same_pad(width, self.kernel_size, self.stride)
-            
+
             if pad_h > 0 or pad_w > 0:
                 x = F.pad(
                     x, 
@@ -159,7 +159,7 @@ class Blur2D(nn.Module):
             padding = 0
         else:
             padding = self.explicit_padding
-        
+
         # Apply depthwise convolution for blurring
         blurred = F.conv2d(
             x, 
