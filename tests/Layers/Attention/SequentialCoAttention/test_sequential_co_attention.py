@@ -47,20 +47,20 @@ def test_coattention_module(input_shape, n_frames, key_dim, value_dim, keras_flo
 
     # Create PyTorch CoAttentionModule
     pytorch_memory_attention_module = CoMemoryAttentionModule_PyTorch(
-        (1, input_shape[2], input_shape[3], key_dim),
-        (1, input_shape[2], input_shape[3], key_dim),
-        key_dim,
-        value_dim,
+        query_shape=(1, input_shape[2], input_shape[3], key_dim),
+        memory_shape=(1, input_shape[2], input_shape[3], key_dim),
+        key_dim=key_dim,
+        value_dim=value_dim,
         use_norm=False,
         attention_drop_rate=0.0,
-        use_positional_embedding=True,
-        ) # Define your PyTorch memory attention module here
+        use_positional_embedding=True
+    ) # Define your PyTorch memory attention module here
     pytorch_coattention = CoAttentionModule_PyTorch(
         pytorch_memory_attention_module,
-        (input_shape[0], 1, input_shape[2], input_shape[3], input_shape[1]),
-        (input_shape[0], n_frames, input_shape[2], input_shape[3], input_shape[1]),
-        key_dim,
-        value_dim
+        query_shape=(input_shape[0], 1, input_shape[2], input_shape[3], input_shape[1]),
+        memory_shape=(input_shape[0], n_frames, input_shape[2], input_shape[3], input_shape[1]),
+        key_dim=key_dim,
+        value_dim=value_dim
     )
 
     # Load weights from Keras to PyTorch
