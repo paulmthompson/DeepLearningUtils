@@ -36,8 +36,12 @@ except ImportError:
 class PixelTripletConfig:
     """Configuration for pixel-based triplet loss."""
     margin: float = 1.0
+    # Legacy parameters (kept for backward compatibility)
     background_pixels: int = 1000
     whisker_pixels: int = 500
+    # New balanced sampling parameters
+    max_samples_per_class: Optional[int] = None  # Maximum samples per class for balanced sampling
+    use_balanced_sampling: bool = True  # Whether to use balanced sampling (recommended)
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
@@ -50,12 +54,19 @@ class PixelTripletConfig:
             raise ValueError(f"background_pixels must be > 0, got {self.background_pixels}")
         if self.whisker_pixels <= 0:
             raise ValueError(f"whisker_pixels must be > 0, got {self.whisker_pixels}")
+        if self.max_samples_per_class is not None and self.max_samples_per_class <= 0:
+            raise ValueError(f"max_samples_per_class must be > 0 or None, got {self.max_samples_per_class}")
         if self.distance_metric not in ["euclidean", "cosine", "manhattan"]:
             raise ValueError(f"distance_metric must be one of ['euclidean', 'cosine', 'manhattan'], got {self.distance_metric}")
         if self.triplet_strategy not in ["hard", "semi_hard", "all"]:
             raise ValueError(f"triplet_strategy must be one of ['hard', 'semi_hard', 'all'], got {self.triplet_strategy}")
         if self.reduction not in ["mean", "sum", "none"]:
             raise ValueError(f"reduction must be one of ['mean', 'sum', 'none'], got {self.reduction}")
+        
+        # Provide guidance on the new parameters
+        if self.use_balanced_sampling and self.max_samples_per_class is None:
+            # Set a reasonable default based on legacy parameters
+            self.max_samples_per_class = min(self.background_pixels, self.whisker_pixels)
 
 
 class PixelTripletLoss(Loss):
@@ -86,6 +97,8 @@ class PixelTripletLoss(Loss):
             'margin': self.config.margin,
             'background_pixels': self.config.background_pixels,
             'whisker_pixels': self.config.whisker_pixels,
+            'max_samples_per_class': self.config.max_samples_per_class,
+            'use_balanced_sampling': self.config.use_balanced_sampling,
             'distance_metric': self.config.distance_metric,
             'triplet_strategy': self.config.triplet_strategy,
             'reduction': self.config.reduction,
@@ -100,6 +113,8 @@ class PixelTripletLoss(Loss):
             margin=config.pop('margin', 1.0),
             background_pixels=config.pop('background_pixels', 1000),
             whisker_pixels=config.pop('whisker_pixels', 500),
+            max_samples_per_class=config.pop('max_samples_per_class', None),
+            use_balanced_sampling=config.pop('use_balanced_sampling', True),
             distance_metric=config.pop('distance_metric', 'euclidean'),
             triplet_strategy=config.pop('triplet_strategy', 'semi_hard'),
             reduction=config.pop('reduction', 'mean'),
@@ -275,10 +290,15 @@ class PixelTripletLoss(Loss):
         # Convert labels to class indices (background=0, whisker_i=i+1)
         class_labels = self._labels_to_classes(y_true_resized)
         
-        # Sample pixels per class - simplified version
-        sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
-            y_pred, class_labels
-        )
+        # Sample pixels per class using balanced or legacy approach
+        if self.config.use_balanced_sampling:
+            sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                y_pred, class_labels
+            )
+        else:
+            sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
+                y_pred, class_labels
+            )
         
         # Check for memory warning
         self._check_memory_usage_simple(sampled_embeddings)
@@ -411,6 +431,86 @@ class PixelTripletLoss(Loss):
         
         return final_embeddings, final_labels
     
+    def _sample_pixels_balanced(
+        self, 
+        embeddings: tf.Tensor, 
+        class_labels: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Balanced pixel sampling that ensures equal samples per class.
+        
+        This method:
+        1. Finds the minimum number of available pixels across all classes
+        2. Caps this at max_samples_per_class if specified
+        3. Samples exactly this many pixels from each class
+        
+        This prevents class imbalance issues that can hurt triplet loss training.
+        """
+        # embeddings: (batch_size, h, w, feature_dim)
+        # class_labels: (batch_size, h, w)
+        
+        # Flatten embeddings and labels
+        shape = tf.shape(embeddings)
+        batch_size = shape[0]
+        h = shape[1]
+        w = shape[2]
+        feature_dim = shape[3]
+        
+        embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
+        class_labels_flat = tf.reshape(class_labels, [-1])  # (N,)
+        
+        # Get unique classes and count pixels per class
+        unique_classes, _ = tf.unique(class_labels_flat)
+        
+        # Find minimum available samples across all classes
+        class_counts = []
+        for class_id in unique_classes:
+            class_mask = tf.equal(class_labels_flat, class_id)
+            class_count = tf.reduce_sum(tf.cast(class_mask, tf.int32))
+            class_counts.append(class_count)
+        
+        # Find the minimum available across classes
+        min_available = tf.reduce_min(tf.stack(class_counts))
+        
+        # Apply the maximum cap if specified
+        if self.config.max_samples_per_class is not None:
+            samples_per_class = tf.minimum(min_available, self.config.max_samples_per_class)
+        else:
+            samples_per_class = min_available
+        
+        # Ensure we have at least 1 sample per class
+        samples_per_class = tf.maximum(samples_per_class, 1)
+        
+        # Sample exactly samples_per_class from each class
+        sampled_embeddings_list = []
+        sampled_labels_list = []
+        
+        for class_id in unique_classes:
+            # Get indices for this class
+            class_mask = tf.equal(class_labels_flat, class_id)
+            class_indices = tf.where(class_mask)[:, 0]
+            
+            # Randomly sample exactly samples_per_class indices
+            sampled_indices = tf.random.shuffle(class_indices)[:samples_per_class]
+            
+            # Gather embeddings and labels
+            class_embeddings = tf.gather(embeddings_flat, sampled_indices)
+            class_labels_sampled = tf.fill([samples_per_class], class_id)
+            
+            sampled_embeddings_list.append(class_embeddings)
+            sampled_labels_list.append(class_labels_sampled)
+        
+        # Concatenate all samples
+        if len(sampled_embeddings_list) > 0:
+            final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
+            final_labels = tf.concat(sampled_labels_list, axis=0)
+        else:
+            # No samples found, create dummy
+            final_embeddings = tf.zeros((2, feature_dim), dtype=tf.float32)
+            final_labels = tf.constant([0, 1], dtype=tf.int32)
+        
+        return final_embeddings, final_labels
+    
     def _check_memory_usage_simple(self, embeddings: tf.Tensor) -> None:
         """Simple memory usage check without tf.py_function."""
         num_pixels = tf.shape(embeddings)[0]
@@ -428,6 +528,8 @@ def create_pixel_triplet_loss(
     margin: float = 1.0,
     background_pixels: int = 1000,
     whisker_pixels: int = 500,
+    max_samples_per_class: Optional[int] = None,
+    use_balanced_sampling: bool = True,
     distance_metric: str = "euclidean",
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
@@ -438,19 +540,27 @@ def create_pixel_triplet_loss(
     
     Args:
         margin: Triplet loss margin
-        background_pixels: Number of background pixels to sample
-        whisker_pixels: Number of whisker pixels to sample per whisker
+        background_pixels: Number of background pixels to sample (legacy, for backward compatibility)
+        whisker_pixels: Number of whisker pixels to sample per whisker (legacy, for backward compatibility)
+        max_samples_per_class: Maximum samples per class for balanced sampling (recommended)
+        use_balanced_sampling: Whether to use balanced sampling (recommended: True)
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan')
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
         
     Returns:
         PixelTripletLoss instance
+        
+    Note:
+        For best results, use balanced sampling with max_samples_per_class.
+        This ensures equal samples per class, preventing class imbalance issues.
     """
     config = PixelTripletConfig(
         margin=margin,
         background_pixels=background_pixels,
         whisker_pixels=whisker_pixels,
+        max_samples_per_class=max_samples_per_class,
+        use_balanced_sampling=use_balanced_sampling,
         distance_metric=distance_metric,
         triplet_strategy=triplet_strategy,
         reduction=reduction,
