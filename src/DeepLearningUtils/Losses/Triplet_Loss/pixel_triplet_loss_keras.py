@@ -378,7 +378,7 @@ class PixelTripletLoss(Loss):
         embeddings: tf.Tensor, 
         class_labels: tf.Tensor
     ) -> Tuple[tf.Tensor, tf.Tensor]:
-        """Simplified pixel sampling per class."""
+        """Simplified pixel sampling per class - graph mode compatible."""
         # embeddings: (batch_size, h, w, feature_dim)
         # class_labels: (batch_size, h, w)
         
@@ -392,42 +392,53 @@ class PixelTripletLoss(Loss):
         embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
         class_labels_flat = tf.reshape(class_labels, [-1])  # (N,)
         
-        # Get unique classes
-        unique_classes, _ = tf.unique(class_labels_flat)
-        
-        # Sample pixels for each class
+        # Sample from each class separately
         sampled_embeddings_list = []
         sampled_labels_list = []
         
-        for class_id in unique_classes:
-            # Get indices for this class
-            class_mask = tf.equal(class_labels_flat, class_id)
-            class_indices = tf.where(class_mask)[:, 0]
-            
-            # Determine number of samples for this class
-            if class_id == 0:  # Background
-                num_samples = tf.minimum(self.config.background_pixels, tf.shape(class_indices)[0])
-            else:  # Whisker
-                num_samples = tf.minimum(self.config.whisker_pixels, tf.shape(class_indices)[0])
-            
-            # Randomly sample indices
-            sampled_indices = tf.random.shuffle(class_indices)[:num_samples]
-            
-            # Gather embeddings and labels
-            class_embeddings = tf.gather(embeddings_flat, sampled_indices)
-            class_labels_sampled = tf.fill([num_samples], class_id)
-            
-            sampled_embeddings_list.append(class_embeddings)
-            sampled_labels_list.append(class_labels_sampled)
+        # Handle background class (class 0)
+        background_mask = tf.equal(class_labels_flat, 0)
+        background_indices = tf.where(background_mask)[:, 0]
+        
+        # Sample background pixels
+        num_background = tf.minimum(self.config.background_pixels, tf.shape(background_indices)[0])
+        sampled_background_indices = tf.random.shuffle(background_indices)[:num_background]
+        background_embeddings = tf.gather(embeddings_flat, sampled_background_indices)
+        background_labels = tf.zeros([num_background], dtype=tf.int32)
+        
+        sampled_embeddings_list.append(background_embeddings)
+        sampled_labels_list.append(background_labels)
+        
+        # Handle whisker classes (classes 1, 2, 3, etc.)
+        # We'll sample from all non-background classes
+        non_background_mask = tf.greater(class_labels_flat, 0)
+        non_background_indices = tf.where(non_background_mask)[:, 0]
+        
+        # Sample whisker pixels
+        num_whisker = tf.minimum(self.config.whisker_pixels, tf.shape(non_background_indices)[0])
+        sampled_whisker_indices = tf.random.shuffle(non_background_indices)[:num_whisker]
+        whisker_embeddings = tf.gather(embeddings_flat, sampled_whisker_indices)
+        whisker_labels = tf.gather(class_labels_flat, sampled_whisker_indices)
+        
+        sampled_embeddings_list.append(whisker_embeddings)
+        sampled_labels_list.append(whisker_labels)
         
         # Concatenate all samples
-        if len(sampled_embeddings_list) > 0:
-            final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
-            final_labels = tf.concat(sampled_labels_list, axis=0)
-        else:
-            # No samples found, create dummy
-            final_embeddings = tf.zeros((2, feature_dim), dtype=tf.float32)
-            final_labels = tf.constant([0, 1], dtype=tf.int32)
+        final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
+        final_labels = tf.concat(sampled_labels_list, axis=0)
+        
+        # Handle edge case where no samples are found
+        final_embeddings = tf.cond(
+            tf.equal(tf.shape(final_embeddings)[0], 0),
+            lambda: tf.zeros((2, feature_dim), dtype=tf.float32),
+            lambda: final_embeddings
+        )
+        
+        final_labels = tf.cond(
+            tf.equal(tf.shape(final_labels)[0], 0),
+            lambda: tf.constant([0, 1], dtype=tf.int32),
+            lambda: final_labels
+        )
         
         return final_embeddings, final_labels
     
@@ -437,7 +448,7 @@ class PixelTripletLoss(Loss):
         class_labels: tf.Tensor
     ) -> Tuple[tf.Tensor, tf.Tensor]:
         """
-        Balanced pixel sampling that ensures equal samples per class.
+        Balanced pixel sampling that ensures equal samples per class - graph mode compatible.
         
         This method:
         1. Finds the minimum number of available pixels across all classes
@@ -459,18 +470,15 @@ class PixelTripletLoss(Loss):
         embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
         class_labels_flat = tf.reshape(class_labels, [-1])  # (N,)
         
-        # Get unique classes and count pixels per class
-        unique_classes, _ = tf.unique(class_labels_flat)
+        # Count pixels for background and non-background classes
+        background_mask = tf.equal(class_labels_flat, 0)
+        background_count = tf.reduce_sum(tf.cast(background_mask, tf.int32))
         
-        # Find minimum available samples across all classes
-        class_counts = []
-        for class_id in unique_classes:
-            class_mask = tf.equal(class_labels_flat, class_id)
-            class_count = tf.reduce_sum(tf.cast(class_mask, tf.int32))
-            class_counts.append(class_count)
+        non_background_mask = tf.greater(class_labels_flat, 0)
+        non_background_count = tf.reduce_sum(tf.cast(non_background_mask, tf.int32))
         
-        # Find the minimum available across classes
-        min_available = tf.reduce_min(tf.stack(class_counts))
+        # Find minimum available samples across classes
+        min_available = tf.minimum(background_count, non_background_count)
         
         # Apply the maximum cap if specified
         if self.config.max_samples_per_class is not None:
@@ -485,29 +493,40 @@ class PixelTripletLoss(Loss):
         sampled_embeddings_list = []
         sampled_labels_list = []
         
-        for class_id in unique_classes:
-            # Get indices for this class
-            class_mask = tf.equal(class_labels_flat, class_id)
-            class_indices = tf.where(class_mask)[:, 0]
-            
-            # Randomly sample exactly samples_per_class indices
-            sampled_indices = tf.random.shuffle(class_indices)[:samples_per_class]
-            
-            # Gather embeddings and labels
-            class_embeddings = tf.gather(embeddings_flat, sampled_indices)
-            class_labels_sampled = tf.fill([samples_per_class], class_id)
-            
-            sampled_embeddings_list.append(class_embeddings)
-            sampled_labels_list.append(class_labels_sampled)
+        # Sample background pixels
+        background_indices = tf.where(background_mask)[:, 0]
+        sampled_background_indices = tf.random.shuffle(background_indices)[:samples_per_class]
+        background_embeddings = tf.gather(embeddings_flat, sampled_background_indices)
+        background_labels = tf.zeros([samples_per_class], dtype=tf.int32)
+        
+        sampled_embeddings_list.append(background_embeddings)
+        sampled_labels_list.append(background_labels)
+        
+        # Sample non-background (whisker) pixels
+        non_background_indices = tf.where(non_background_mask)[:, 0]
+        sampled_whisker_indices = tf.random.shuffle(non_background_indices)[:samples_per_class]
+        whisker_embeddings = tf.gather(embeddings_flat, sampled_whisker_indices)
+        whisker_labels = tf.gather(class_labels_flat, sampled_whisker_indices)
+        
+        sampled_embeddings_list.append(whisker_embeddings)
+        sampled_labels_list.append(whisker_labels)
         
         # Concatenate all samples
-        if len(sampled_embeddings_list) > 0:
-            final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
-            final_labels = tf.concat(sampled_labels_list, axis=0)
-        else:
-            # No samples found, create dummy
-            final_embeddings = tf.zeros((2, feature_dim), dtype=tf.float32)
-            final_labels = tf.constant([0, 1], dtype=tf.int32)
+        final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
+        final_labels = tf.concat(sampled_labels_list, axis=0)
+        
+        # Handle edge case where no samples are found
+        final_embeddings = tf.cond(
+            tf.equal(tf.shape(final_embeddings)[0], 0),
+            lambda: tf.zeros((2, feature_dim), dtype=tf.float32),
+            lambda: final_embeddings
+        )
+        
+        final_labels = tf.cond(
+            tf.equal(tf.shape(final_labels)[0], 0),
+            lambda: tf.constant([0, 1], dtype=tf.int32),
+            lambda: final_labels
+        )
         
         return final_embeddings, final_labels
     
