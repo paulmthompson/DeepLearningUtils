@@ -42,6 +42,7 @@ class PixelTripletConfig:
     # New balanced sampling parameters
     max_samples_per_class: Optional[int] = None  # Maximum samples per class for balanced sampling
     use_balanced_sampling: bool = True  # Whether to use balanced sampling (recommended)
+    strict_per_class_balancing: bool = False  # True per-class balancing (eager mode only)
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
@@ -67,6 +68,11 @@ class PixelTripletConfig:
         if self.use_balanced_sampling and self.max_samples_per_class is None:
             # Set a reasonable default based on legacy parameters
             self.max_samples_per_class = min(self.background_pixels, self.whisker_pixels)
+        
+        # Warn about eager mode requirement for strict balancing
+        if self.strict_per_class_balancing:
+            print("Warning: strict_per_class_balancing=True requires eager execution mode for full functionality. "
+                  "In graph mode, it will fall back to background vs whisker balancing.")
 
 
 class PixelTripletLoss(Loss):
@@ -99,6 +105,7 @@ class PixelTripletLoss(Loss):
             'whisker_pixels': self.config.whisker_pixels,
             'max_samples_per_class': self.config.max_samples_per_class,
             'use_balanced_sampling': self.config.use_balanced_sampling,
+            'strict_per_class_balancing': self.config.strict_per_class_balancing,
             'distance_metric': self.config.distance_metric,
             'triplet_strategy': self.config.triplet_strategy,
             'reduction': self.config.reduction,
@@ -115,6 +122,7 @@ class PixelTripletLoss(Loss):
             whisker_pixels=config.pop('whisker_pixels', 500),
             max_samples_per_class=config.pop('max_samples_per_class', None),
             use_balanced_sampling=config.pop('use_balanced_sampling', True),
+            strict_per_class_balancing=config.pop('strict_per_class_balancing', False),
             distance_metric=config.pop('distance_metric', 'euclidean'),
             triplet_strategy=config.pop('triplet_strategy', 'semi_hard'),
             reduction=config.pop('reduction', 'mean'),
@@ -292,10 +300,24 @@ class PixelTripletLoss(Loss):
         
         # Sample pixels per class using balanced or legacy approach
         if self.config.use_balanced_sampling:
-            sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                y_pred, class_labels
-            )
+            if self.config.strict_per_class_balancing:
+                # Try strict per-class balancing (eager mode only)
+                try:
+                    sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
+                        y_pred, class_labels
+                    )
+                except Exception:
+                    # Fall back to regular balanced sampling if strict fails (e.g., in graph mode)
+                    sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                        y_pred, class_labels
+                    )
+            else:
+                # Regular balanced sampling (background vs whiskers)
+                sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                    y_pred, class_labels
+                )
         else:
+            # Legacy sampling approach
             sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
                 y_pred, class_labels
             )
@@ -530,6 +552,81 @@ class PixelTripletLoss(Loss):
         
         return final_embeddings, final_labels
     
+    def _sample_pixels_strict_balanced_eager(
+        self, 
+        embeddings: tf.Tensor, 
+        class_labels: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Strict per-class balanced sampling - EAGER MODE ONLY.
+        
+        This method achieves true per-class balancing where each individual class
+        (background, whisker1, whisker2, etc.) gets exactly the same number of samples.
+        This is ideal for discriminating between different whisker instances.
+        
+        Note: This method uses Python for loops and only works in eager execution mode.
+        """
+        # embeddings: (batch_size, h, w, feature_dim)
+        # class_labels: (batch_size, h, w)
+        
+        # Flatten embeddings and labels
+        shape = tf.shape(embeddings)
+        batch_size = shape[0]
+        h = shape[1]
+        w = shape[2]
+        feature_dim = shape[3]
+        
+        embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
+        class_labels_flat = tf.reshape(class_labels, [-1])  # (N,)
+        
+        # Get unique classes and count pixels per class
+        unique_classes, _, class_counts = tf.unique_with_counts(class_labels_flat)
+        
+        # Find minimum available samples across ALL classes
+        min_available = tf.reduce_min(class_counts)
+        
+        # Apply the maximum cap if specified
+        if self.config.max_samples_per_class is not None:
+            samples_per_class = tf.minimum(min_available, self.config.max_samples_per_class)
+        else:
+            samples_per_class = min_available
+        
+        # Ensure we have at least 1 sample per class
+        samples_per_class = tf.maximum(samples_per_class, 1)
+        
+        # Sample exactly samples_per_class from each individual class
+        sampled_embeddings_list = []
+        sampled_labels_list = []
+        
+        # Use Python for loop (only works in eager mode)
+        for i in range(len(unique_classes)):
+            class_id = unique_classes[i]
+            
+            # Get indices for this specific class
+            class_mask = tf.equal(class_labels_flat, class_id)
+            class_indices = tf.where(class_mask)[:, 0]
+            
+            # Randomly sample exactly samples_per_class indices
+            sampled_indices = tf.random.shuffle(class_indices)[:samples_per_class]
+            
+            # Gather embeddings and labels
+            class_embeddings = tf.gather(embeddings_flat, sampled_indices)
+            class_labels_sampled = tf.fill([samples_per_class], class_id)
+            
+            sampled_embeddings_list.append(class_embeddings)
+            sampled_labels_list.append(class_labels_sampled)
+        
+        # Concatenate all samples
+        if len(sampled_embeddings_list) > 0:
+            final_embeddings = tf.concat(sampled_embeddings_list, axis=0)
+            final_labels = tf.concat(sampled_labels_list, axis=0)
+        else:
+            # No samples found, create dummy
+            final_embeddings = tf.zeros((2, feature_dim), dtype=tf.float32)
+            final_labels = tf.constant([0, 1], dtype=tf.int32)
+        
+        return final_embeddings, final_labels
+    
     def _check_memory_usage_simple(self, embeddings: tf.Tensor) -> None:
         """Simple memory usage check without tf.py_function."""
         num_pixels = tf.shape(embeddings)[0]
@@ -549,6 +646,7 @@ def create_pixel_triplet_loss(
     whisker_pixels: int = 500,
     max_samples_per_class: Optional[int] = None,
     use_balanced_sampling: bool = True,
+    strict_per_class_balancing: bool = False,
     distance_metric: str = "euclidean",
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
@@ -563,6 +661,7 @@ def create_pixel_triplet_loss(
         whisker_pixels: Number of whisker pixels to sample per whisker (legacy, for backward compatibility)
         max_samples_per_class: Maximum samples per class for balanced sampling (recommended)
         use_balanced_sampling: Whether to use balanced sampling (recommended: True)
+        strict_per_class_balancing: True per-class balancing for each whisker class (eager mode only)
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan')
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
@@ -571,8 +670,9 @@ def create_pixel_triplet_loss(
         PixelTripletLoss instance
         
     Note:
-        For best results, use balanced sampling with max_samples_per_class.
-        This ensures equal samples per class, preventing class imbalance issues.
+        For whisker discrimination, use strict_per_class_balancing=True with eager execution.
+        This ensures each whisker class gets exactly the same number of samples, improving
+        the model's ability to distinguish between different whisker instances.
     """
     config = PixelTripletConfig(
         margin=margin,
@@ -580,6 +680,7 @@ def create_pixel_triplet_loss(
         whisker_pixels=whisker_pixels,
         max_samples_per_class=max_samples_per_class,
         use_balanced_sampling=use_balanced_sampling,
+        strict_per_class_balancing=strict_per_class_balancing,
         distance_metric=distance_metric,
         triplet_strategy=triplet_strategy,
         reduction=reduction,
