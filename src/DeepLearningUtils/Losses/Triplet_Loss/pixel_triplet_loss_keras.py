@@ -107,6 +107,149 @@ class PixelTripletLoss(Loss):
         )
         return cls(config=triplet_config, **config)
     
+    def _compute_pairwise_distances(self, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Compute pairwise distances using the specified distance metric.
+        
+        Args:
+            embeddings: tensor of shape (batch_size, embed_dim)
+            
+        Returns:
+            pairwise_distances: tensor of shape (batch_size, batch_size)
+        """
+        if self.config.distance_metric == "euclidean":
+            return _pairwise_distances(embeddings, squared=False)
+        elif self.config.distance_metric == "cosine":
+            return self._cosine_distances(embeddings)
+        elif self.config.distance_metric == "manhattan":
+            return self._manhattan_distances(embeddings)
+        else:
+            raise ValueError(f"Unsupported distance metric: {self.config.distance_metric}")
+    
+    def _cosine_distances(self, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Compute pairwise cosine distances.
+        
+        Cosine distance = 1 - cosine_similarity
+        Cosine similarity = dot(a,b) / (||a|| * ||b||)
+        
+        Args:
+            embeddings: tensor of shape (batch_size, embed_dim)
+            
+        Returns:
+            pairwise_distances: tensor of shape (batch_size, batch_size)
+        """
+        # Normalize embeddings to unit vectors
+        normalized_embeddings = tf.nn.l2_normalize(embeddings, axis=1)
+        
+        # Compute cosine similarities
+        cosine_similarities = tf.matmul(normalized_embeddings, normalized_embeddings, transpose_b=True)
+        
+        # Convert to cosine distances
+        cosine_distances = 1.0 - cosine_similarities
+        
+        # Ensure distances are non-negative (handle numerical errors)
+        cosine_distances = tf.maximum(cosine_distances, 0.0)
+        
+        return cosine_distances
+    
+    def _manhattan_distances(self, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Compute pairwise Manhattan (L1) distances.
+        
+        Manhattan distance = sum(|a_i - b_i|)
+        
+        Args:
+            embeddings: tensor of shape (batch_size, embed_dim)
+            
+        Returns:
+            pairwise_distances: tensor of shape (batch_size, batch_size)
+        """
+        # Expand embeddings for broadcasting
+        # embeddings_i: (batch_size, 1, embed_dim)
+        # embeddings_j: (1, batch_size, embed_dim)
+        embeddings_i = tf.expand_dims(embeddings, 1)
+        embeddings_j = tf.expand_dims(embeddings, 0)
+        
+        # Compute absolute differences and sum along the embedding dimension
+        manhattan_distances = tf.reduce_sum(tf.abs(embeddings_i - embeddings_j), axis=2)
+        
+        return manhattan_distances
+    
+    def _batch_hard_triplet_loss_custom(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Custom implementation of batch hard triplet loss with configurable distance metrics.
+        
+        This is adapted from the original batch_hard_triplet_loss but uses our custom distance function.
+        """
+        # Get the pairwise distance matrix using the configured metric
+        pairwise_dist = self._compute_pairwise_distances(embeddings)
+        
+        # For each anchor, get the hardest positive
+        mask_anchor_positive = _get_anchor_positive_triplet_mask(labels)
+        mask_anchor_positive = keras.ops.cast(mask_anchor_positive, "float32")
+        
+        # We put to 0 any element where (a, p) is not valid 
+        anchor_positive_dist = tf.multiply(mask_anchor_positive, pairwise_dist)
+        
+        # shape (batch_size, 1)
+        hardest_positive_dist = tf.reduce_max(anchor_positive_dist, axis=1, keepdims=True)
+        
+        # For each anchor, get the hardest negative
+        mask_anchor_negative = _get_anchor_negative_triplet_mask(labels)
+        mask_anchor_negative = keras.ops.cast(mask_anchor_negative, "float32")
+        
+        # We add the maximum value in each row to the invalid negatives
+        max_anchor_negative_dist = tf.reduce_max(pairwise_dist, axis=1, keepdims=True)
+        anchor_negative_dist = pairwise_dist + max_anchor_negative_dist * (1.0 - mask_anchor_negative)
+        
+        # shape (batch_size,)
+        hardest_negative_dist = tf.reduce_min(anchor_negative_dist, axis=1, keepdims=True)
+        scaling = tf.reduce_mean(anchor_negative_dist, axis=1, keepdims=True) + 1e-16
+        
+        # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
+        triplet_loss = tf.maximum(
+            (hardest_positive_dist - hardest_negative_dist) / scaling + self.config.margin,
+            0.0
+        )
+        
+        # Get final mean triplet loss
+        triplet_loss = tf.reduce_mean(triplet_loss)
+        
+        return triplet_loss
+    
+    def _batch_all_triplet_loss_custom(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Custom implementation of batch all triplet loss with configurable distance metrics.
+        """
+        # Get the pairwise distance matrix using the configured metric
+        pairwise_dist = self._compute_pairwise_distances(embeddings)
+        
+        anchor_positive_dist = tf.expand_dims(pairwise_dist, 2)
+        anchor_negative_dist = tf.expand_dims(pairwise_dist, 1)
+        
+        # Compute a 3D tensor of size (batch_size, batch_size, batch_size)
+        triplet_loss = anchor_positive_dist - anchor_negative_dist + self.config.margin
+        
+        # Put to zero the invalid triplets
+        mask = _get_triplet_mask(labels)
+        mask = keras.ops.cast(mask, "float32")
+        triplet_loss = tf.multiply(mask, triplet_loss)
+        
+        num_valid_triplets = tf.reduce_sum(mask)
+        
+        # Remove negative losses (i.e. the easy triplets)
+        triplet_loss = tf.maximum(triplet_loss, 0.0)
+        
+        # Count number of positive triplets (where triplet_loss > 0)
+        valid_triplets = keras.ops.cast(tf.greater(triplet_loss, 1e-16), "float32")
+        num_positive_triplets = tf.reduce_sum(valid_triplets)
+        
+        # Get final mean triplet loss over the positive valid triplets
+        triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+        
+        return triplet_loss
+
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """
         Compute pixel-based triplet loss.
@@ -140,32 +283,13 @@ class PixelTripletLoss(Loss):
         # Check for memory warning
         self._check_memory_usage_simple(sampled_embeddings)
         
-        # Use existing triplet loss functions based on strategy
+        # Use custom triplet loss functions that support different distance metrics
         if self.config.triplet_strategy == "hard":
-            loss = batch_hard_triplet_loss(
-                sampled_labels, 
-                sampled_embeddings, 
-                self.config.margin,
-                squared=(self.config.distance_metric == "euclidean"),
-                normalize=False
-            )
+            loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
         elif self.config.triplet_strategy == "all":
-            loss, _ = batch_all_triplet_loss(
-                sampled_labels,
-                sampled_embeddings,
-                self.config.margin,
-                squared=(self.config.distance_metric == "euclidean"),
-                normalize=False,
-                remove_negative=True
-            )
+            loss = self._batch_all_triplet_loss_custom(sampled_labels, sampled_embeddings)
         else:  # semi_hard - use hard as fallback since semi_hard is complex
-            loss = batch_hard_triplet_loss(
-                sampled_labels, 
-                sampled_embeddings, 
-                self.config.margin,
-                squared=(self.config.distance_metric == "euclidean"),
-                normalize=False
-            )
+            loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
         
         return loss
     
