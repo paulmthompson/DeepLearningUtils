@@ -42,7 +42,8 @@ class PixelTripletConfig:
     # New balanced sampling parameters
     max_samples_per_class: Optional[int] = None  # Maximum samples per class for balanced sampling
     use_balanced_sampling: bool = True  # Whether to use balanced sampling (recommended)
-    strict_per_class_balancing: bool = False  # True per-class balancing (eager mode only)
+    strict_per_class_balancing: bool = False  # True per-class balancing
+    prefer_graph_mode_strict: bool = True  # Use graph-mode strict balancing when possible
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
@@ -106,6 +107,7 @@ class PixelTripletLoss(Loss):
             'max_samples_per_class': self.config.max_samples_per_class,
             'use_balanced_sampling': self.config.use_balanced_sampling,
             'strict_per_class_balancing': self.config.strict_per_class_balancing,
+            'prefer_graph_mode_strict': self.config.prefer_graph_mode_strict,
             'distance_metric': self.config.distance_metric,
             'triplet_strategy': self.config.triplet_strategy,
             'reduction': self.config.reduction,
@@ -123,6 +125,7 @@ class PixelTripletLoss(Loss):
             max_samples_per_class=config.pop('max_samples_per_class', None),
             use_balanced_sampling=config.pop('use_balanced_sampling', True),
             strict_per_class_balancing=config.pop('strict_per_class_balancing', False),
+            prefer_graph_mode_strict=config.pop('prefer_graph_mode_strict', True),
             distance_metric=config.pop('distance_metric', 'euclidean'),
             triplet_strategy=config.pop('triplet_strategy', 'semi_hard'),
             reduction=config.pop('reduction', 'mean'),
@@ -301,16 +304,41 @@ class PixelTripletLoss(Loss):
         # Sample pixels per class using balanced or legacy approach
         if self.config.use_balanced_sampling:
             if self.config.strict_per_class_balancing:
-                # Try strict per-class balancing (eager mode only)
-                try:
-                    sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
-                        y_pred, class_labels
-                    )
-                except Exception:
-                    # Fall back to regular balanced sampling if strict fails (e.g., in graph mode)
-                    sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                        y_pred, class_labels
-                    )
+                # Try strict per-class balancing
+                if self.config.prefer_graph_mode_strict:
+                    # Try graph-mode strict balancing first
+                    try:
+                        sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
+                            y_pred, class_labels
+                        )
+                    except Exception:
+                        # Fall back to eager-mode strict balancing
+                        try:
+                            sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
+                                y_pred, class_labels
+                            )
+                        except Exception:
+                            # Fall back to regular balanced sampling
+                            sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                                y_pred, class_labels
+                            )
+                else:
+                    # Try eager-mode strict balancing first
+                    try:
+                        sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
+                            y_pred, class_labels
+                        )
+                    except Exception:
+                        # Fall back to graph-mode strict balancing
+                        try:
+                            sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
+                                y_pred, class_labels
+                            )
+                        except Exception:
+                            # Fall back to regular balanced sampling
+                            sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                                y_pred, class_labels
+                            )
             else:
                 # Regular balanced sampling (background vs whiskers)
                 sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
@@ -627,6 +655,109 @@ class PixelTripletLoss(Loss):
         
         return final_embeddings, final_labels
     
+    def _sample_pixels_strict_balanced_graph(
+        self, 
+        embeddings: tf.Tensor, 
+        class_labels: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Strict per-class balanced sampling - GRAPH MODE COMPATIBLE.
+        
+        This method achieves true per-class balancing where each individual class
+        (background, whisker1, whisker2, etc.) gets exactly the same number of samples.
+        Uses tf.map_fn instead of Python for loops to work in graph mode.
+        
+        This is ideal for discriminating between different whisker instances.
+        """
+        # embeddings: (batch_size, h, w, feature_dim)
+        # class_labels: (batch_size, h, w)
+        
+        # Flatten embeddings and labels
+        shape = tf.shape(embeddings)
+        batch_size = shape[0]
+        h = shape[1]
+        w = shape[2]
+        feature_dim = shape[3]
+        
+        embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
+        class_labels_flat = tf.reshape(class_labels, [-1])  # (N,)
+        
+        # Get unique classes and count pixels per class
+        unique_classes, _, class_counts = tf.unique_with_counts(class_labels_flat)
+        
+        # Find minimum available samples across ALL classes
+        min_available = tf.reduce_min(class_counts)
+        
+        # Apply the maximum cap if specified
+        if self.config.max_samples_per_class is not None:
+            samples_per_class = tf.minimum(min_available, self.config.max_samples_per_class)
+        else:
+            samples_per_class = min_available
+        
+        # Ensure we have at least 1 sample per class
+        samples_per_class = tf.maximum(samples_per_class, 1)
+        
+        # Define a function to sample from a single class
+        def sample_single_class(class_id):
+            """Sample pixels from a single class."""
+            # Get indices for this specific class
+            class_mask = tf.equal(class_labels_flat, class_id)
+            class_indices = tf.where(class_mask)[:, 0]
+            
+            # Randomly sample exactly samples_per_class indices
+            sampled_indices = tf.random.shuffle(class_indices)[:samples_per_class]
+            
+            # Gather embeddings and labels
+            class_embeddings = tf.gather(embeddings_flat, sampled_indices)
+            class_labels_sampled = tf.fill([samples_per_class], class_id)
+            
+            return class_embeddings, class_labels_sampled
+        
+        # Use tf.map_fn to apply sampling to each unique class (graph mode compatible)
+        sampled_results = tf.map_fn(
+            sample_single_class,
+            unique_classes,
+            fn_output_signature=(
+                tf.TensorSpec([None, feature_dim], dtype=tf.float32),  # embeddings
+                tf.TensorSpec([None], dtype=tf.int32)  # labels
+            ),
+            parallel_iterations=10
+        )
+        
+        # Extract embeddings and labels from results
+        sampled_embeddings_per_class, sampled_labels_per_class = sampled_results
+        
+        # Reshape and concatenate all samples
+        # sampled_embeddings_per_class: (num_classes, samples_per_class, feature_dim)
+        # sampled_labels_per_class: (num_classes, samples_per_class)
+        
+        num_classes = tf.shape(unique_classes)[0]
+        total_samples = num_classes * samples_per_class
+        
+        final_embeddings = tf.reshape(
+            sampled_embeddings_per_class, 
+            [total_samples, feature_dim]
+        )
+        final_labels = tf.reshape(
+            sampled_labels_per_class, 
+            [total_samples]
+        )
+        
+        # Handle edge case where no samples are found
+        final_embeddings = tf.cond(
+            tf.equal(tf.shape(final_embeddings)[0], 0),
+            lambda: tf.zeros((2, feature_dim), dtype=tf.float32),
+            lambda: final_embeddings
+        )
+        
+        final_labels = tf.cond(
+            tf.equal(tf.shape(final_labels)[0], 0),
+            lambda: tf.constant([0, 1], dtype=tf.int32),
+            lambda: final_labels
+        )
+        
+        return final_embeddings, final_labels
+    
     def _check_memory_usage_simple(self, embeddings: tf.Tensor) -> None:
         """Simple memory usage check without tf.py_function."""
         num_pixels = tf.shape(embeddings)[0]
@@ -647,6 +778,7 @@ def create_pixel_triplet_loss(
     max_samples_per_class: Optional[int] = None,
     use_balanced_sampling: bool = True,
     strict_per_class_balancing: bool = False,
+    prefer_graph_mode_strict: bool = True,
     distance_metric: str = "euclidean",
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
@@ -661,7 +793,8 @@ def create_pixel_triplet_loss(
         whisker_pixels: Number of whisker pixels to sample per whisker (legacy, for backward compatibility)
         max_samples_per_class: Maximum samples per class for balanced sampling (recommended)
         use_balanced_sampling: Whether to use balanced sampling (recommended: True)
-        strict_per_class_balancing: True per-class balancing for each whisker class (eager mode only)
+        strict_per_class_balancing: True per-class balancing for each whisker class
+        prefer_graph_mode_strict: Use graph-mode strict balancing when possible (recommended: True)
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan')
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
@@ -670,9 +803,9 @@ def create_pixel_triplet_loss(
         PixelTripletLoss instance
         
     Note:
-        For whisker discrimination, use strict_per_class_balancing=True with eager execution.
-        This ensures each whisker class gets exactly the same number of samples, improving
-        the model's ability to distinguish between different whisker instances.
+        For whisker discrimination, use strict_per_class_balancing=True. 
+        Graph-mode strict balancing works in both eager and graph execution modes,
+        providing better performance than eager-only strict balancing.
     """
     config = PixelTripletConfig(
         margin=margin,
@@ -681,6 +814,7 @@ def create_pixel_triplet_loss(
         max_samples_per_class=max_samples_per_class,
         use_balanced_sampling=use_balanced_sampling,
         strict_per_class_balancing=strict_per_class_balancing,
+        prefer_graph_mode_strict=prefer_graph_mode_strict,
         distance_metric=distance_metric,
         triplet_strategy=triplet_strategy,
         reduction=reduction,
