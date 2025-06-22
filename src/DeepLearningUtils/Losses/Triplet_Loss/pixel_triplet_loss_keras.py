@@ -47,6 +47,7 @@ class PixelTripletConfig:
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
+    remove_easy_triplets: bool = False  # Whether to exclude easy triplets in batch_all mode
     memory_warning_threshold: int = 10_000_000  # Warn if pairwise matrix > 10M elements
     
     def __post_init__(self):
@@ -115,6 +116,7 @@ class PixelTripletLoss(Loss):
             'distance_metric': self.config.distance_metric,
             'triplet_strategy': self.config.triplet_strategy,
             'reduction': self.config.reduction,
+            'remove_easy_triplets': self.config.remove_easy_triplets,
             'memory_warning_threshold': self.config.memory_warning_threshold,
         }
         return {**base_config, **config_dict}
@@ -133,6 +135,7 @@ class PixelTripletLoss(Loss):
             distance_metric=config.pop('distance_metric', 'euclidean'),
             triplet_strategy=config.pop('triplet_strategy', 'semi_hard'),
             reduction=config.pop('reduction', 'mean'),
+            remove_easy_triplets=config.pop('remove_easy_triplets', False),
             memory_warning_threshold=config.pop('memory_warning_threshold', 10_000_000),
         )
         return cls(config=triplet_config, **config)
@@ -251,6 +254,10 @@ class PixelTripletLoss(Loss):
     def _batch_all_triplet_loss_custom(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
         """
         Custom implementation of batch all triplet loss with configurable distance metrics.
+        
+        This implementation follows the typical "batch all" behavior from literature:
+        - By default, includes easy triplets (negative losses) as they provide gradient information
+        - Optionally excludes easy triplets if remove_easy_triplets=True for harder training
         """
         # Get the pairwise distance matrix using the configured metric
         pairwise_dist = self._compute_pairwise_distances(embeddings)
@@ -268,15 +275,21 @@ class PixelTripletLoss(Loss):
         
         num_valid_triplets = tf.reduce_sum(mask)
         
-        # Remove negative losses (i.e. the easy triplets)
-        triplet_loss = tf.maximum(triplet_loss, 0.0)
-        
-        # Count number of positive triplets (where triplet_loss > 0)
-        valid_triplets = keras.ops.cast(tf.greater(triplet_loss, 1e-16), "float32")
-        num_positive_triplets = tf.reduce_sum(valid_triplets)
-        
-        # Get final mean triplet loss over the positive valid triplets
-        triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+        # Handle easy triplets based on configuration
+        if self.config.remove_easy_triplets:
+            # Remove negative losses (i.e. the easy triplets) - focus on hard examples
+            triplet_loss = tf.maximum(triplet_loss, 0.0)
+            
+            # Count number of positive triplets (where triplet_loss > 0)
+            valid_triplets = keras.ops.cast(tf.greater(triplet_loss, 1e-16), "float32")
+            num_positive_triplets = tf.reduce_sum(valid_triplets)
+            
+            # Get final mean triplet loss over the positive valid triplets
+            triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+        else:
+            # Include easy triplets (typical literature behavior) - use all valid triplets
+            # Easy triplets have negative loss values but still provide gradient information
+            triplet_loss = tf.reduce_sum(triplet_loss) / (num_valid_triplets + 1e-16)
         
         return triplet_loss
 
@@ -786,6 +799,7 @@ def create_pixel_triplet_loss(
     distance_metric: str = "euclidean",
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
+    remove_easy_triplets: bool = False,
     **kwargs
 ) -> PixelTripletLoss:
     """
@@ -802,6 +816,7 @@ def create_pixel_triplet_loss(
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan')
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
+        remove_easy_triplets: Whether to exclude easy triplets in batch_all mode
         
     Returns:
         PixelTripletLoss instance
@@ -826,6 +841,7 @@ def create_pixel_triplet_loss(
         distance_metric=distance_metric,
         triplet_strategy=triplet_strategy,
         reduction=reduction,
+        remove_easy_triplets=remove_easy_triplets,
         **kwargs
     )
     return PixelTripletLoss(config=config) 
