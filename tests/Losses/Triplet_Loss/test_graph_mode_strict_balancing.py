@@ -201,7 +201,8 @@ class TestGraphModeStrictBalancing:
         model.compile(
             optimizer='adam',
             loss=pixel_loss,
-            run_eagerly=False  # Graph mode!
+            run_eagerly=False,  # Graph mode!
+            jit_compile=False   # Disable XLA compilation to avoid UniqueWithCounts issues
         )
         
         print("\n" + "="*60)

@@ -70,10 +70,14 @@ class PixelTripletConfig:
             # Set a reasonable default based on legacy parameters
             self.max_samples_per_class = min(self.background_pixels, self.whisker_pixels)
         
-        # Warn about eager mode requirement for strict balancing
+        # Provide guidance about strict balancing requirements
         if self.strict_per_class_balancing:
-            print("Warning: strict_per_class_balancing=True requires eager execution mode for full functionality. "
-                  "In graph mode, it will fall back to background vs whisker balancing.")
+            if self.prefer_graph_mode_strict:
+                print("Info: strict_per_class_balancing=True with graph mode. "
+                      "For full compatibility, compile your model with jit_compile=False to avoid XLA issues.")
+            else:
+                print("Info: strict_per_class_balancing=True with eager mode preference. "
+                      "Graph mode fallback available if needed.")
 
 
 class PixelTripletLoss(Loss):
@@ -806,6 +810,10 @@ def create_pixel_triplet_loss(
         For whisker discrimination, use strict_per_class_balancing=True. 
         Graph-mode strict balancing works in both eager and graph execution modes,
         providing better performance than eager-only strict balancing.
+        
+        Important: When using strict_per_class_balancing=True in graph mode,
+        compile your model with jit_compile=False to avoid XLA compilation issues:
+        model.compile(optimizer='adam', loss=pixel_loss, jit_compile=False)
     """
     config = PixelTripletConfig(
         margin=margin,
