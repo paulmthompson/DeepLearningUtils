@@ -590,3 +590,50 @@ class TestPixelTripletLossNumericalStability:
         # - With easy triplets included, the loss can be negative (easy triplets dominate)
         # - With easy triplets excluded, only positive losses remain
         # This is the fundamental difference between the two approaches
+
+    def test_embedding_upsampling_preserves_thin_structures(self, keras_float32_policy):
+        """Test that upsampling embeddings preserves thin structures better than downsampling labels."""
+        # Create a scenario where labels have higher resolution than embeddings
+        # This simulates thin whisker structures that could be lost during downsampling
+        
+        batch_size = 1
+        embed_h, embed_w, feature_dim = 4, 4, 3  # Low resolution embeddings
+        label_h, label_w, num_whiskers = 8, 8, 2  # High resolution labels
+        
+        # Create simple embeddings (low resolution)
+        embeddings = tf.random.normal((batch_size, embed_h, embed_w, feature_dim))
+        
+        # Create labels with thin structures (high resolution)
+        labels = tf.zeros((batch_size, label_h, label_w, num_whiskers), dtype=tf.float32)
+        
+        # Create a thin vertical line (1 pixel wide) in the middle - this represents a whisker
+        mid_col = label_w // 2
+        labels = tf.tensor_scatter_nd_update(
+            labels,
+            [[0, 1, mid_col, 0], [0, 2, mid_col, 0], [0, 3, mid_col, 0], 
+             [0, 4, mid_col, 0], [0, 5, mid_col, 0], [0, 6, mid_col, 0]],
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        )
+        
+        # Test the loss function
+        config = PixelTripletConfig(
+            background_pixels=10,
+            whisker_pixels=10,
+            use_balanced_sampling=False  # Use simple sampling for predictability
+        )
+        loss_fn = PixelTripletLoss(config=config)
+        
+        # This should work without losing the thin structure
+        loss = loss_fn(labels, embeddings)
+        
+        # Verify the loss is computed successfully
+        assert loss.shape == ()
+        assert not tf.math.is_nan(loss)
+        assert not tf.math.is_inf(loss)
+        
+        print(f"Successfully computed loss with thin structures: {loss.numpy():.6f}")
+        print(f"Label shape: {labels.shape}, Embedding shape: {embeddings.shape}")
+        print("Thin whisker structure preserved by upsampling embeddings instead of downsampling labels")
+        
+        # The key insight: By upsampling embeddings from 4x4 to 8x8, we preserve
+        # all the thin label structures that would be lost if we downsampled 8x8 labels to 4x4

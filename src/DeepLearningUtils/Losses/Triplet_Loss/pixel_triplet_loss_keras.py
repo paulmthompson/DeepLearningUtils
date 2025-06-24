@@ -88,9 +88,21 @@ class PixelTripletLoss(Loss):
     This loss operates on pixel-level embeddings, sampling a specified number of pixels
     per class and computing triplet loss with semi-hard or hard negative mining.
     
+    Key Features:
+    - Upsamples embeddings to match label resolution (preserves thin structures)
+    - Configurable distance metrics (Euclidean, cosine, Manhattan)
+    - Balanced sampling to prevent class imbalance issues
+    - Graph-mode compatible with strict per-class balancing
+    - Literature-compliant easy triplet handling
+    
     Args:
         config: PixelTripletConfig instance with loss parameters
         name: Name for the loss function
+        
+    Note:
+        When label resolution > embedding resolution, embeddings are upsampled using
+        nearest neighbor interpolation. This prevents aliasing artifacts that would
+        occur when downsampling thin structures like whiskers.
     """
     
     def __init__(
@@ -312,11 +324,14 @@ class PixelTripletLoss(Loss):
         pred_h, pred_w = tf.shape(y_pred)[1], tf.shape(y_pred)[2]
         feature_dim = tf.shape(y_pred)[3]
         
-        # Resize labels to match prediction dimensions
-        y_true_resized = self._resize_labels(y_true, pred_h, pred_w)
+        label_h, label_w = tf.shape(y_true)[1], tf.shape(y_true)[2]
+        
+        # Instead of downsampling labels (which causes aliasing of thin structures),
+        # upsample embeddings to match label resolution for better accuracy
+        y_pred_resized = self._resize_embeddings(y_pred, label_h, label_w)
         
         # Convert labels to class indices (background=0, whisker_i=i+1)
-        class_labels = self._labels_to_classes(y_true_resized)
+        class_labels = self._labels_to_classes(y_true)
         
         # Sample pixels per class using balanced or legacy approach
         if self.config.use_balanced_sampling:
@@ -326,45 +341,45 @@ class PixelTripletLoss(Loss):
                     # Try graph-mode strict balancing first
                     try:
                         sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
-                            y_pred, class_labels
+                            y_pred_resized, class_labels
                         )
                     except Exception:
                         # Fall back to eager-mode strict balancing
                         try:
                             sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                         except Exception:
                             # Fall back to regular balanced sampling
                             sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                 else:
                     # Try eager-mode strict balancing first
                     try:
                         sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
-                            y_pred, class_labels
+                            y_pred_resized, class_labels
                         )
                     except Exception:
                         # Fall back to graph-mode strict balancing
                         try:
                             sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                         except Exception:
                             # Fall back to regular balanced sampling
                             sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
             else:
                 # Regular balanced sampling (background vs whiskers)
                 sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                    y_pred, class_labels
+                    y_pred_resized, class_labels
                 )
         else:
             # Legacy sampling approach
             sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
-                y_pred, class_labels
+                y_pred_resized, class_labels
             )
         
         # Check for memory warning
@@ -379,6 +394,50 @@ class PixelTripletLoss(Loss):
             loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
         
         return loss
+    
+    def _resize_embeddings(self, embeddings: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
+        """
+        Resize embeddings to match label dimensions using nearest neighbor interpolation.
+        
+        This approach upsamples embeddings instead of downsampling labels to avoid
+        aliasing artifacts that can cause thin structures (like whiskers) to disappear.
+        
+        Args:
+            embeddings: tensor of shape (batch_size, h, w, feature_dim)
+            target_h: target height (from labels)
+            target_w: target width (from labels)
+            
+        Returns:
+            resized_embeddings: tensor of shape (batch_size, target_h, target_w, feature_dim)
+        """
+        # embeddings: (batch_size, h, w, feature_dim)
+        
+        shape = tf.shape(embeddings)
+        batch_size = shape[0]
+        original_h = shape[1]
+        original_w = shape[2]
+        feature_dim = shape[3]
+        
+        # Check if resize is needed
+        def no_resize_needed():
+            return embeddings
+        
+        def resize_needed():
+            # Use tf.image.resize with nearest neighbor to preserve embedding values
+            # This creates redundancy but preserves all spatial relationships
+            resized = tf.image.resize(
+                embeddings,
+                size=[target_h, target_w],
+                method='nearest'  # Nearest neighbor to avoid interpolation artifacts
+            )
+            
+            return tf.cast(resized, tf.float32)
+        
+        return tf.cond(
+            tf.logical_and(tf.equal(original_h, target_h), tf.equal(original_w, target_w)),
+            no_resize_needed,
+            resize_needed
+        )
     
     def _resize_labels(self, labels: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
         """Resize labels to match prediction dimensions."""
