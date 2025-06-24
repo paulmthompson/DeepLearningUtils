@@ -47,6 +47,7 @@ class PixelTripletConfig:
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
+    remove_easy_triplets: bool = False  # Whether to exclude easy triplets in batch_all mode
     memory_warning_threshold: int = 10_000_000  # Warn if pairwise matrix > 10M elements
     
     def __post_init__(self):
@@ -87,9 +88,21 @@ class PixelTripletLoss(Loss):
     This loss operates on pixel-level embeddings, sampling a specified number of pixels
     per class and computing triplet loss with semi-hard or hard negative mining.
     
+    Key Features:
+    - Upsamples embeddings to match label resolution (preserves thin structures)
+    - Configurable distance metrics (Euclidean, cosine, Manhattan)
+    - Balanced sampling to prevent class imbalance issues
+    - Graph-mode compatible with strict per-class balancing
+    - Literature-compliant easy triplet handling
+    
     Args:
         config: PixelTripletConfig instance with loss parameters
         name: Name for the loss function
+        
+    Note:
+        When label resolution > embedding resolution, embeddings are upsampled using
+        nearest neighbor interpolation. This prevents aliasing artifacts that would
+        occur when downsampling thin structures like whiskers.
     """
     
     def __init__(
@@ -115,6 +128,7 @@ class PixelTripletLoss(Loss):
             'distance_metric': self.config.distance_metric,
             'triplet_strategy': self.config.triplet_strategy,
             'reduction': self.config.reduction,
+            'remove_easy_triplets': self.config.remove_easy_triplets,
             'memory_warning_threshold': self.config.memory_warning_threshold,
         }
         return {**base_config, **config_dict}
@@ -133,6 +147,7 @@ class PixelTripletLoss(Loss):
             distance_metric=config.pop('distance_metric', 'euclidean'),
             triplet_strategy=config.pop('triplet_strategy', 'semi_hard'),
             reduction=config.pop('reduction', 'mean'),
+            remove_easy_triplets=config.pop('remove_easy_triplets', False),
             memory_warning_threshold=config.pop('memory_warning_threshold', 10_000_000),
         )
         return cls(config=triplet_config, **config)
@@ -251,6 +266,10 @@ class PixelTripletLoss(Loss):
     def _batch_all_triplet_loss_custom(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
         """
         Custom implementation of batch all triplet loss with configurable distance metrics.
+        
+        This implementation follows the typical "batch all" behavior from literature:
+        - By default, includes easy triplets (negative losses) as they provide gradient information
+        - Optionally excludes easy triplets if remove_easy_triplets=True for harder training
         """
         # Get the pairwise distance matrix using the configured metric
         pairwise_dist = self._compute_pairwise_distances(embeddings)
@@ -268,15 +287,21 @@ class PixelTripletLoss(Loss):
         
         num_valid_triplets = tf.reduce_sum(mask)
         
-        # Remove negative losses (i.e. the easy triplets)
-        triplet_loss = tf.maximum(triplet_loss, 0.0)
-        
-        # Count number of positive triplets (where triplet_loss > 0)
-        valid_triplets = keras.ops.cast(tf.greater(triplet_loss, 1e-16), "float32")
-        num_positive_triplets = tf.reduce_sum(valid_triplets)
-        
-        # Get final mean triplet loss over the positive valid triplets
-        triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+        # Handle easy triplets based on configuration
+        if self.config.remove_easy_triplets:
+            # Remove negative losses (i.e. the easy triplets) - focus on hard examples
+            triplet_loss = tf.maximum(triplet_loss, 0.0)
+            
+            # Count number of positive triplets (where triplet_loss > 0)
+            valid_triplets = keras.ops.cast(tf.greater(triplet_loss, 1e-16), "float32")
+            num_positive_triplets = tf.reduce_sum(valid_triplets)
+            
+            # Get final mean triplet loss over the positive valid triplets
+            triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+        else:
+            # Include easy triplets (typical literature behavior) - use all valid triplets
+            # Easy triplets have negative loss values but still provide gradient information
+            triplet_loss = tf.reduce_sum(triplet_loss) / (num_valid_triplets + 1e-16)
         
         return triplet_loss
 
@@ -299,11 +324,14 @@ class PixelTripletLoss(Loss):
         pred_h, pred_w = tf.shape(y_pred)[1], tf.shape(y_pred)[2]
         feature_dim = tf.shape(y_pred)[3]
         
-        # Resize labels to match prediction dimensions
-        y_true_resized = self._resize_labels(y_true, pred_h, pred_w)
+        label_h, label_w = tf.shape(y_true)[1], tf.shape(y_true)[2]
+        
+        # Instead of downsampling labels (which causes aliasing of thin structures),
+        # upsample embeddings to match label resolution for better accuracy
+        y_pred_resized = self._resize_embeddings(y_pred, label_h, label_w)
         
         # Convert labels to class indices (background=0, whisker_i=i+1)
-        class_labels = self._labels_to_classes(y_true_resized)
+        class_labels = self._labels_to_classes(y_true)
         
         # Sample pixels per class using balanced or legacy approach
         if self.config.use_balanced_sampling:
@@ -313,45 +341,45 @@ class PixelTripletLoss(Loss):
                     # Try graph-mode strict balancing first
                     try:
                         sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
-                            y_pred, class_labels
+                            y_pred_resized, class_labels
                         )
                     except Exception:
                         # Fall back to eager-mode strict balancing
                         try:
                             sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                         except Exception:
                             # Fall back to regular balanced sampling
                             sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                 else:
                     # Try eager-mode strict balancing first
                     try:
                         sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_eager(
-                            y_pred, class_labels
+                            y_pred_resized, class_labels
                         )
                     except Exception:
                         # Fall back to graph-mode strict balancing
                         try:
                             sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced_graph(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
                         except Exception:
                             # Fall back to regular balanced sampling
                             sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                                y_pred, class_labels
+                                y_pred_resized, class_labels
                             )
             else:
                 # Regular balanced sampling (background vs whiskers)
                 sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
-                    y_pred, class_labels
+                    y_pred_resized, class_labels
                 )
         else:
             # Legacy sampling approach
             sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
-                y_pred, class_labels
+                y_pred_resized, class_labels
             )
         
         # Check for memory warning
@@ -366,6 +394,50 @@ class PixelTripletLoss(Loss):
             loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
         
         return loss
+    
+    def _resize_embeddings(self, embeddings: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
+        """
+        Resize embeddings to match label dimensions using nearest neighbor interpolation.
+        
+        This approach upsamples embeddings instead of downsampling labels to avoid
+        aliasing artifacts that can cause thin structures (like whiskers) to disappear.
+        
+        Args:
+            embeddings: tensor of shape (batch_size, h, w, feature_dim)
+            target_h: target height (from labels)
+            target_w: target width (from labels)
+            
+        Returns:
+            resized_embeddings: tensor of shape (batch_size, target_h, target_w, feature_dim)
+        """
+        # embeddings: (batch_size, h, w, feature_dim)
+        
+        shape = tf.shape(embeddings)
+        batch_size = shape[0]
+        original_h = shape[1]
+        original_w = shape[2]
+        feature_dim = shape[3]
+        
+        # Check if resize is needed
+        def no_resize_needed():
+            return embeddings
+        
+        def resize_needed():
+            # Use tf.image.resize with nearest neighbor to preserve embedding values
+            # This creates redundancy but preserves all spatial relationships
+            resized = tf.image.resize(
+                embeddings,
+                size=[target_h, target_w],
+                method='nearest'  # Nearest neighbor to avoid interpolation artifacts
+            )
+            
+            return tf.cast(resized, tf.float32)
+        
+        return tf.cond(
+            tf.logical_and(tf.equal(original_h, target_h), tf.equal(original_w, target_w)),
+            no_resize_needed,
+            resize_needed
+        )
     
     def _resize_labels(self, labels: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
         """Resize labels to match prediction dimensions."""
@@ -786,6 +858,7 @@ def create_pixel_triplet_loss(
     distance_metric: str = "euclidean",
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
+    remove_easy_triplets: bool = False,
     **kwargs
 ) -> PixelTripletLoss:
     """
@@ -802,6 +875,7 @@ def create_pixel_triplet_loss(
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan')
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
+        remove_easy_triplets: Whether to exclude easy triplets in batch_all mode
         
     Returns:
         PixelTripletLoss instance
@@ -826,6 +900,7 @@ def create_pixel_triplet_loss(
         distance_metric=distance_metric,
         triplet_strategy=triplet_strategy,
         reduction=reduction,
+        remove_easy_triplets=remove_easy_triplets,
         **kwargs
     )
     return PixelTripletLoss(config=config) 
