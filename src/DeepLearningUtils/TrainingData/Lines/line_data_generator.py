@@ -391,6 +391,169 @@ class LineDataGenerator(keras.utils.Sequence):
 
         return np.stack(masks, axis=0)
 
+    def create_linestrings_from_dataframe_labels(
+        self,
+        labels_dict: dict,
+        original_shape: Tuple[int, int]
+    ) -> List[LineStringsOnImage]:
+        """
+        Create LineStringsOnImage objects from DataFrame labels for augmentation.
+
+        Parameters
+        ----------
+        labels_dict : dict
+            Dictionary mapping label names to coordinate arrays
+        original_shape : Tuple[int, int]
+            Original image shape (height, width) for coordinate scaling
+
+        Returns
+        -------
+        List[LineStringsOnImage]
+            List of LineStringsOnImage objects, one per label category in label_order
+        """
+        linestrings_list = []
+
+        for label_name in self.label_order:
+            if label_name in labels_dict:
+                coords = labels_dict[label_name]
+                # Resize coordinates if needed
+                coords_resized = self._resize_coordinates(coords, original_shape)
+
+                # Create LineStringsOnImage for this label category
+                lsoi = LineStringsOnImage([], shape=(self._image_height, self._image_width))
+
+                # Interpolate points if needed and create LineString
+                interpolated_points = interpolate_points(coords_resized, self.max_point_distance)
+                lsoi.line_strings.append(LineString(interpolated_points))
+
+                linestrings_list.append(lsoi)
+            else:
+                # Create empty LineStringsOnImage for missing labels
+                empty_lsoi = LineStringsOnImage([], shape=(self._image_height, self._image_width))
+                linestrings_list.append(empty_lsoi)
+
+        return linestrings_list
+
+    def augment_images_dataframe(
+        self,
+        X: np.ndarray,
+        batch_data: List[dict]
+    ) -> Tuple[np.ndarray, List[List[LineStringsOnImage]]]:
+        """
+        Apply augmentation to images and lines from DataFrame input.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Batch of images
+        batch_data : List[dict]
+            Batch of data dictionaries containing original images and labels
+
+        Returns
+        -------
+        Tuple[np.ndarray, List[List[LineStringsOnImage]]]
+            Augmented images and list of LineStringsOnImage lists (one list per sample,
+            containing one LineStringsOnImage per label category)
+        """
+        images_aug = []
+        all_lsois_aug = []
+
+        for i, data in enumerate(batch_data):
+            labels_dict = data['labels']
+            original_shape = data['image'].shape[:2]
+
+            # Create LineStringsOnImage objects for this sample
+            lsois = self.create_linestrings_from_dataframe_labels(labels_dict, original_shape)
+
+            # Apply augmentation to image and all line categories simultaneously
+            image_aug = X[i]
+            lsois_aug = []
+
+            # Apply augmentation to each label category separately to maintain order
+            for lsoi in lsois:
+                if len(lsoi.line_strings) > 0:
+                    # Apply augmentation
+                    img_temp, lsoi_temp = self.seq(image=image_aug, line_strings=lsoi)
+
+                    # Clip lines that go outside the image
+                    with np.errstate(invalid="ignore"):
+                        lsoi_temp.clip_out_of_image_()
+
+                    # Check if augmentation changed the number of lines
+                    if len(lsoi.line_strings) != len(lsoi_temp.line_strings):
+                        # Skip augmentation for this category if lines were lost
+                        lsois_aug.append(lsoi)
+                    else:
+                        lsois_aug.append(lsoi_temp)
+                        # Update image with augmented version (all categories should get same augmentation)
+                        image_aug = img_temp
+                else:
+                    # Keep empty LineStringsOnImage as is
+                    lsois_aug.append(lsoi)
+
+            images_aug.append(image_aug)
+            all_lsois_aug.append(lsois_aug)
+
+        return np.array(images_aug), all_lsois_aug
+
+    def create_masks_from_linestrings(
+        self,
+        all_lsois: List[List[LineStringsOnImage]]
+    ) -> np.ndarray:
+        """
+        Create binary masks or distance maps from augmented LineStringsOnImage objects.
+
+        Parameters
+        ----------
+        all_lsois : List[List[LineStringsOnImage]]
+            List of lists, where each inner list contains LineStringsOnImage objects
+            for one sample (one per label category in label_order)
+
+        Returns
+        -------
+        np.ndarray
+            Array of masks of shape (batch_size, height, width, n_channels)
+        """
+        masks = []
+
+        for lsois in all_lsois:  # For each sample
+            category_masks = []
+
+            # Process each label category in order
+            for lsoi in lsois:
+                if len(lsoi.line_strings) > 0:
+                    # Create mask from line
+                    points = np.array(lsoi.line_strings[0].coords)  # Should only have one line per category
+                    if self.use_distance_maps:
+                        mask = create_line_mask(points, self._image_height, self._image_width, self.line_width)
+                        mask = create_distance_map(mask)
+                    else:
+                        mask = create_line_mask(points, self._image_height, self._image_width, self.line_width)
+                else:
+                    # Create blank mask for missing/empty labels
+                    mask = np.zeros((self._image_height, self._image_width), dtype=np.float32)
+
+                category_masks.append(mask)
+
+            if self.compress_labels:
+                # Combine all labels into single channel
+                combined_mask = np.any(np.stack(category_masks, axis=-1), axis=-1).astype(np.float32)
+                final_mask = np.expand_dims(combined_mask, axis=-1)
+            else:
+                # Stack individual category masks
+                final_mask = np.stack(category_masks, axis=-1)
+
+            if self.include_background:
+                background_mask = np.expand_dims(
+                    np.logical_not(np.any(final_mask > 0, axis=-1)).astype(np.float32),
+                    axis=-1
+                )
+                final_mask = np.concatenate((background_mask, final_mask), axis=-1)
+
+            masks.append(final_mask)
+
+        return np.stack(masks, axis=0)
+
     def __data_generation(
         self,
         list_IDs_temp: np.ndarray
@@ -418,8 +581,14 @@ class LineDataGenerator(keras.utils.Sequence):
 
         X = np.stack(batch_images, axis=0)
 
-        # Create masks
-        y = self.create_masks_from_dataframe(batch_data)
+        # Apply augmentation if in training mode
+        if self.training and self.seq is not None:
+            X, lsois_aug = self.augment_images_dataframe(X, batch_data)
+            # Create masks from augmented LineStrings
+            y = self.create_masks_from_linestrings(lsois_aug)
+        else:
+            # Create masks directly from DataFrame data without augmentation
+            y = self.create_masks_from_dataframe(batch_data)
 
         # Convert to float32 and normalize
         X = X.astype('float32')
