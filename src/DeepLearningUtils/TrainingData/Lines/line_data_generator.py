@@ -520,3 +520,110 @@ class LineDataGenerator(keras.utils.Sequence):
                 mask = np.zeros((self._image_height, self._image_width), dtype=np.float32)
                 category_masks.append(mask)
 
+            # Process lines and assign them to appropriate categories
+            if hasattr(lsoi, '_category_mapping') and len(lsoi.line_strings) > 0:
+                for line_idx, line in enumerate(lsoi.line_strings):
+                    if line_idx < len(lsoi._category_mapping):
+                        category_name = lsoi._category_mapping[line_idx]
+                        category_idx = self.label_order.index(category_name)
+
+                        # Create mask from line
+                        points = np.array(line.coords)
+                        if self.use_distance_maps:
+                            line_mask = create_line_mask(points, self._image_height, self._image_width, self.line_width)
+                            line_mask = create_distance_map(line_mask)
+                        else:
+                            line_mask = create_line_mask(points, self._image_height, self._image_width, self.line_width)
+
+                        # Add to the appropriate category mask
+                        category_masks[category_idx] = np.maximum(category_masks[category_idx], line_mask)
+
+            if self.compress_labels:
+                # Combine all labels into single channel
+                combined_mask = np.any(np.stack(category_masks, axis=-1), axis=-1).astype(np.float32)
+                final_mask = np.expand_dims(combined_mask, axis=-1)
+            else:
+                # Stack individual category masks
+                final_mask = np.stack(category_masks, axis=-1)
+
+            if self.include_background:
+                background_mask = np.expand_dims(
+                    np.logical_not(np.any(final_mask > 0, axis=-1)).astype(np.float32),
+                    axis=-1
+                )
+                final_mask = np.concatenate((background_mask, final_mask), axis=-1)
+
+            masks.append(final_mask)
+
+        return np.stack(masks, axis=0)
+
+    def __data_generation(
+        self,
+        list_IDs_temp: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate one batch of data."""
+        if self.use_dataframe:
+            return self._data_generation_dataframe(list_IDs_temp)
+        else:
+            return self._data_generation_legacy(list_IDs_temp)
+
+    def _data_generation_dataframe(self, list_IDs_temp: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate batch from DataFrame input."""
+        # Get batch data
+        batch_data = []
+        batch_images = []
+
+        for idx in list_IDs_temp:
+            row = self.dataframe.iloc[idx]
+            image = self._resize_image(row['image'])
+            batch_images.append(image)
+            batch_data.append({
+                'image': row['image'],  # Keep original for coordinate scaling
+                'labels': row['labels']
+            })
+
+        X = np.stack(batch_images, axis=0)
+
+        # Apply augmentation if in training mode
+        if self.training and self.seq is not None:
+            X, lsois_aug = self.augment_images_dataframe(X, batch_data)
+            # Create masks from augmented LineStrings
+            y = self.create_masks_from_linestrings(lsois_aug)
+        else:
+            # Create masks directly from DataFrame data without augmentation
+            y = self.create_masks_from_dataframe(batch_data)
+
+        # Convert to float32 and normalize
+        X = X.astype('float32')
+        y = y.astype('float32')
+
+        return X, y
+
+    def _data_generation_legacy(self, list_IDs_temp: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate batch from legacy numpy array input."""
+        # Get batch data
+        X = self.images[list_IDs_temp]
+        y = [self.labels[i] for i in list_IDs_temp]
+
+        # Resize images if needed
+        if self.target_resolution is not None:
+            X_resized = []
+            for img in X:
+                X_resized.append(self._resize_image(img))
+            X = np.stack(X_resized, axis=0)
+
+        # Apply augmentation if in training mode
+        if self.training and self.seq is not None:
+            X, y = self.augment_images(X, y)
+        else:
+            # Convert lines to LineStringsOnImage objects
+            y = [self.create_linestrings_from_lines(lines) for lines in y]
+
+        # Create masks
+        y = self.create_masks(y)
+
+        # Convert to float32
+        X = X.astype('float32')
+        y = y.astype('float32')
+
+        return X, y
