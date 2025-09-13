@@ -307,3 +307,180 @@ def test_load_line_data_nonexistent_experiment_folder(simulated_line_data):
             experiment_folders=['nonexistent_experiment'],
             image_prefix="img"
         )
+
+
+def test_load_line_data_require_all_labels(simulated_line_data):
+    """
+    Test the require_all_labels feature to ensure only frames with all specified labels are loaded.
+    """
+    data_info = simulated_line_data
+    temp_dir = data_info['temp_dir']
+
+    # Test with requiring all labels - should load all frames since our fixture has all labels
+    df_all_required = load_line_data(
+        data_folder=temp_dir,
+        image_prefix="img",
+        require_all_labels=['line_category_1', 'line_category_2']
+    )
+
+    # Should have all samples since all frames have both labels in our fixture
+    expected_total = len(data_info['experiments']) * data_info['num_samples']
+    assert len(df_all_required) == expected_total
+
+    # Verify that all loaded frames have both required labels
+    for _, row in df_all_required.iterrows():
+        labels = row['labels']
+        assert 'line_category_1' in labels, "All frames should have line_category_1"
+        assert 'line_category_2' in labels, "All frames should have line_category_2"
+
+
+def test_load_line_data_require_all_labels_missing(simulated_line_data):
+    """
+    Test require_all_labels when requiring a label that doesn't exist.
+    Should return empty DataFrame or skip experiments.
+    """
+    data_info = simulated_line_data
+    temp_dir = data_info['temp_dir']
+
+    # Test with requiring a non-existent label
+    df_missing = load_line_data(
+        data_folder=temp_dir,
+        image_prefix="img",
+        require_all_labels=['line_category_1', 'nonexistent_category']
+    )
+
+    # Should be empty since 'nonexistent_category' doesn't exist
+    assert df_missing.empty, "DataFrame should be empty when requiring non-existent labels"
+
+
+def test_load_line_data_require_all_labels_partial_overlap():
+    """
+    Test require_all_labels with a custom fixture that has partial label overlap.
+    """
+    # Create a temporary directory with partial label overlap
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        # Create experiment with partial label overlap
+        exp_path = os.path.join(temp_dir, 'test_experiment')
+        images_path = os.path.join(exp_path, 'images')
+        labels_path = os.path.join(exp_path, 'labels')
+
+        os.makedirs(images_path)
+        os.makedirs(os.path.join(labels_path, 'label_A'))
+        os.makedirs(os.path.join(labels_path, 'label_B'))
+
+        # Create 5 images
+        for i in range(1, 6):
+            frame_num = f"{i:07d}"
+
+            # Create image
+            image = np.zeros((64, 64, 3), dtype=np.uint8)
+            image_path = os.path.join(images_path, f"img{frame_num}.png")
+            cv2.imwrite(image_path, image)
+
+            # Create label_A for frames 1, 2, 3, 4 (not 5)
+            if i <= 4:
+                csv_path_A = os.path.join(labels_path, 'label_A', f"{frame_num}.csv")
+                with open(csv_path_A, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([10, 10])
+                    writer.writerow([20, 20])
+
+            # Create label_B for frames 2, 3, 4, 5 (not 1)
+            if i >= 2:
+                csv_path_B = os.path.join(labels_path, 'label_B', f"{frame_num}.csv")
+                with open(csv_path_B, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([15, 15])
+                    writer.writerow([25, 25])
+
+        # Test without require_all_labels - should load all 5 frames
+        df_all = load_line_data(
+            data_folder=temp_dir,
+            image_prefix="img"
+        )
+        assert len(df_all) == 5, "Should load all 5 frames without filtering"
+
+        # Test with require_all_labels - should only load frames 2, 3, 4 (intersection)
+        df_filtered = load_line_data(
+            data_folder=temp_dir,
+            image_prefix="img",
+            require_all_labels=['label_A', 'label_B']
+        )
+        assert len(df_filtered) == 3, "Should only load 3 frames that have both labels"
+
+        # Verify that all loaded frames have both labels
+        for _, row in df_filtered.iterrows():
+            labels = row['labels']
+            assert 'label_A' in labels, "All filtered frames should have label_A"
+            assert 'label_B' in labels, "All filtered frames should have label_B"
+
+        # Verify the specific frame names that were loaded
+        loaded_frame_names = set(df_filtered['image_name'].values)
+        expected_frames = {'0000002', '0000003', '0000004'}
+        assert loaded_frame_names == expected_frames, f"Expected frames {expected_frames}, got {loaded_frame_names}"
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_load_line_data_require_all_labels_per_experiment():
+    """
+    Test that require_all_labels filtering is applied per experiment, not globally.
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        # Create two experiments with different label patterns
+        for exp_name, label_pattern in [('exp1', 'A_only'), ('exp2', 'both')]:
+            exp_path = os.path.join(temp_dir, exp_name)
+            images_path = os.path.join(exp_path, 'images')
+            labels_path = os.path.join(exp_path, 'labels')
+
+            os.makedirs(images_path)
+            os.makedirs(os.path.join(labels_path, 'label_A'))
+            os.makedirs(os.path.join(labels_path, 'label_B'))
+
+            # Create 3 images per experiment
+            for i in range(1, 4):
+                frame_num = f"{i:07d}"
+
+                # Create image
+                image = np.zeros((64, 64, 3), dtype=np.uint8)
+                image_path = os.path.join(images_path, f"img{frame_num}.png")
+                cv2.imwrite(image_path, image)
+
+                # Create label_A for all frames in both experiments
+                csv_path_A = os.path.join(labels_path, 'label_A', f"{frame_num}.csv")
+                with open(csv_path_A, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([10, 10])
+                    writer.writerow([20, 20])
+
+                # Create label_B only for exp2
+                if label_pattern == 'both':
+                    csv_path_B = os.path.join(labels_path, 'label_B', f"{frame_num}.csv")
+                    with open(csv_path_B, 'w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([15, 15])
+                        writer.writerow([25, 25])
+
+        # Test with require_all_labels - should only load from exp2
+        df_filtered = load_line_data(
+            data_folder=temp_dir,
+            image_prefix="img",
+            require_all_labels=['label_A', 'label_B']
+        )
+
+        # Should only have frames from exp2 (3 frames)
+        assert len(df_filtered) == 3, "Should only load frames from exp2"
+
+        # Verify all frames are from exp2
+        unique_folders = df_filtered['folder_id'].unique()
+        assert len(unique_folders) == 1, "Should only have frames from one experiment"
+        assert unique_folders[0] == 'exp2', "Should only have frames from exp2"
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+

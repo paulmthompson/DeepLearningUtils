@@ -19,6 +19,7 @@ def load_line_data(
     csv_delimiter: str = ',',
     experiment_folders: Optional[List[str]] = None,
     image_prefix: Optional[str] = None,
+    require_all_labels: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Load line data from a folder structure into a pandas DataFrame.
@@ -43,7 +44,11 @@ def load_line_data(
         Prefix to remove from image filenames to match CSV filenames.
         For example, if images are named "img00001.png" and CSVs are "00001.csv",
         set image_prefix="img"
-        
+    require_all_labels : Optional[List[str]]
+        If specified, only load frames that have all of these label categories present.
+        This filtering is applied per experiment - a frame is only loaded if ALL
+        specified labels exist for that frame within the experiment.
+
     Returns
     -------
     pd.DataFrame
@@ -76,7 +81,8 @@ def load_line_data(
         
         # Get paths
         exp_path = os.path.join(data_folder, experiment_folder)
-        label_folders = os.listdir(os.path.join(exp_path, labels_dir_name))
+        labels_path = os.path.join(exp_path, labels_dir_name)
+        label_folders = os.listdir(labels_path)
         img_folder = os.path.join(exp_path, images_dir_name)
         
         # Get image paths
@@ -86,7 +92,45 @@ def load_line_data(
         if not image_paths:
             print(f'No images found in {experiment_folder}')
             continue
-            
+
+        # If require_all_labels is specified, find frames that have all required labels
+        valid_frame_names = None
+        if require_all_labels:
+            print(f'Filtering frames that have all required labels: {require_all_labels}')
+
+            # Check that all required label folders exist
+            missing_label_folders = [label for label in require_all_labels
+                                   if label not in label_folders]
+            if missing_label_folders:
+                print(f'Warning: Required label folders not found in {experiment_folder}: {missing_label_folders}')
+                continue
+
+            # Find frames that exist in ALL required label folders
+            frame_sets = []
+            for required_label in require_all_labels:
+                label_folder_path = os.path.join(labels_path, required_label)
+                if os.path.exists(label_folder_path):
+                    # Get all CSV files in this label folder
+                    csv_files = [f for f in os.listdir(label_folder_path)
+                               if f.endswith('.csv')]
+                    # Extract frame names (remove .csv extension)
+                    frame_names = {os.path.splitext(f)[0] for f in csv_files}
+                    frame_sets.append(frame_names)
+                else:
+                    print(f'Warning: Label folder {required_label} not found in {experiment_folder}')
+                    frame_sets.append(set())
+
+            # Find intersection of all frame sets
+            if frame_sets:
+                valid_frame_names = set.intersection(*frame_sets)
+                print(f'Found {len(valid_frame_names)} frames with all required labels in {experiment_folder}')
+            else:
+                valid_frame_names = set()
+
+            if not valid_frame_names:
+                print(f'No frames found with all required labels in {experiment_folder}')
+                continue
+
         # Load and resize all images first
         images_dict = {}
         old_resolution = None
@@ -107,10 +151,16 @@ def load_line_data(
             img_name = os.path.splitext(os.path.basename(image_path))[0]
             if image_prefix and img_name.startswith(image_prefix):
                 img_name = img_name[len(image_prefix):]
+
+            # If require_all_labels is specified, only include valid frames
+            if valid_frame_names is not None and img_name not in valid_frame_names:
+                continue
+
             images_dict[img_name] = image_resized
         
         print(f'Original resolution: {old_resolution}')
-        
+        print(f'Loading {len(images_dict)} images from {experiment_folder}')
+
         # Process each image
         for img_name, image in images_dict.items():
             labels_dict = {}
@@ -124,6 +174,9 @@ def load_line_data(
                         # Load coordinates and scale to new resolution
                         coords = np.loadtxt(label_path, delimiter=csv_delimiter)
                         if len(coords) > 0:
+                            # Handle case where there's only one point (1D array)
+                            if coords.ndim == 1:
+                                coords = coords.reshape(1, -1)
                             # Scale coordinates to new resolution
                             coords[:, 0] *= target_resolution[1] / old_resolution[1]
                             coords[:, 1] *= target_resolution[0] / old_resolution[0]
@@ -131,7 +184,17 @@ def load_line_data(
                     except Exception as e:
                         print(f'Error loading {label_path}: {str(e)}')
             
+            # Add validation for require_all_labels
+            if require_all_labels:
+                # Check that all required labels are present
+                missing_labels = [label for label in require_all_labels
+                                if label not in labels_dict]
+                if missing_labels:
+                    print(f'Warning: Frame {img_name} missing required labels: {missing_labels}')
+                    continue
+
             # Only add to dataframe if at least one label was found
+            # (or if require_all_labels is specified, all required labels are present)
             if labels_dict:
                 data.append({
                     'folder_id': experiment_folder,
@@ -288,4 +351,4 @@ def load_line_data_for_generator(
         label_names=label_names,
         validation_folders=validation_folders,
         return_numpy=return_numpy
-    ) 
+    )
