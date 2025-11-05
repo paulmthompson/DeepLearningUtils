@@ -95,6 +95,15 @@ def asymmetric_focal_tversky_loss(delta=0.7, gamma=0.75):
         back_dice = (1-dice_class[:, 0])
         fore_dice = (1-dice_class[:, 1]) * keras.ops.power(1-dice_class[:, 1], -gamma)
 
+        # --- THE FIX ---
+        # Get the sum of the true labels for each class
+        true_sum = keras.ops.sum(y_true, axis=axis)
+
+        # If true_sum for a class is 0, set its loss to 0
+        back_dice = keras.ops.where(keras.ops.equal(true_sum[:, 0], 0), 0.0, back_dice)
+        fore_dice = keras.ops.where(keras.ops.equal(true_sum[:, 1], 0), 0.0, fore_dice)
+        # --- END FIX ---
+
         # Average class scores
         loss = keras.ops.mean(keras.ops.stack([back_dice, fore_dice], axis=-1))
         return loss
@@ -122,7 +131,7 @@ def asym_unified_focal_loss(weight=0.5, delta=0.6, gamma=0.5):
         y_pred = keras.ops.cast(y_pred, "float32")
 
         # Create background and prepend to last dimension
-        
+
         y_true = keras.ops.concatenate([1 - y_true, y_true], axis=-1)
         y_pred = keras.ops.concatenate([1 - y_pred, y_pred], axis=-1)
 
@@ -163,6 +172,15 @@ def symmetric_focal_tversky_loss(delta=0.7, gamma=0.75):
         #calculate losses separately for each class, enhancing both classes
         back_dice = (1-dice_class[:, 0]) * keras.ops.power(1-dice_class[:, 0], -gamma)
         fore_dice = (1-dice_class[:, 1]) * keras.ops.power(1-dice_class[:, 1], -gamma)
+
+        # --- THE FIX ---
+        # Get the sum of the true labels for each class
+        true_sum = keras.ops.sum(y_true, axis=axis)
+
+        # If true_sum for a class is 0, set its loss to 0
+        back_dice = keras.ops.where(keras.ops.equal(true_sum[:, 0], 0), 0.0, back_dice)
+        fore_dice = keras.ops.where(keras.ops.equal(true_sum[:, 1], 0), 0.0, fore_dice)
+        # --- END FIX ---
 
         # Average class scores
         loss = keras.ops.mean(keras.ops.stack([back_dice, fore_dice], axis=-1))
