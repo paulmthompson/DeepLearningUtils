@@ -27,9 +27,77 @@ from .triplet_loss_keras import (
 try:
     # Keras 3 style import
     from keras.src.losses.loss import Loss
-except ImportError:
-    # Fallback for older Keras versions
-    from keras.losses import Loss
+except Exception:
+    try:
+        # Public API for many installations
+        from keras.losses import Loss
+    except Exception:
+        # Fallback to TensorFlow Keras if needed
+        from tensorflow.keras.losses import Loss
+
+
+# --- Added: masks that exclude background from positive pairs but allow it as negatives ---
+def _get_anchor_positive_triplet_mask_exclude_background(labels: tf.Tensor) -> tf.Tensor:
+    """
+    Valid anchor-positive pairs where labels match and are non-background (>0).
+    Shape: (batch, batch)
+    """
+    # Ensure labels is rank-1 [B]
+    labels = tf.reshape(labels, [-1])
+    batch_size = tf.shape(labels)[0]
+
+    # i != j
+    indices_not_equal = tf.logical_not(tf.eye(batch_size, dtype=tf.bool))
+
+    # label match
+    labels_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))  # (B,B)
+
+    # anchor must be non-background; since labels_equal, positive is also non-bg
+    anchor_non_bg = tf.greater(tf.expand_dims(labels, 0), 0)  # (B,B) broadcast along columns
+
+    mask = tf.logical_and(indices_not_equal, tf.logical_and(labels_equal, anchor_non_bg))
+    return mask
+
+
+def _get_triplet_mask_exclude_background(labels: tf.Tensor) -> tf.Tensor:
+    """
+    Valid triplets (a,p,n) where:
+    - a != p, a != n, p != n
+    - labels[a] == labels[p] and labels[a] > 0
+    - labels[a] != labels[n] (negative can be background or any other class)
+    Shape: (batch, batch, batch)
+    """
+    # Ensure labels is rank-1 [B]
+    labels = tf.reshape(labels, [-1])
+    batch_size = tf.shape(labels)[0]
+
+    # distinct indices masks
+    eye = tf.eye(batch_size, dtype=tf.bool)  # (B,B)
+    i_not_j = tf.logical_not(eye)  # (B,B)
+    i_not_k = tf.logical_not(eye)  # (B,B)
+    j_not_k = tf.logical_not(eye)  # (B,B)
+
+    # Expand to (B,B,B)
+    i_not_j = tf.expand_dims(i_not_j, 2)  # (B,B,1)
+    i_not_k = tf.expand_dims(i_not_k, 1)  # (B,1,B)
+    j_not_k = tf.expand_dims(j_not_k, 0)  # (1,B,B)
+
+    distinct = tf.logical_and(tf.logical_and(i_not_j, i_not_k), j_not_k)  # (B,B,B)
+
+    # labels equality/inequality across axes (a,p,n)
+    labels_a = tf.expand_dims(tf.expand_dims(labels, 1), 2)   # (B,1,1)
+    labels_p = tf.expand_dims(tf.expand_dims(labels, 0), 2)   # (1,B,1)
+    labels_n = tf.expand_dims(tf.expand_dims(labels, 0), 1)   # (1,1,B)
+
+    labels_equal_ap = tf.equal(labels_a, labels_p)            # (B,B,B)
+    labels_not_equal_an = tf.not_equal(labels_a, labels_n)    # (B,B,B)
+
+    # anchor must be non-background
+    anchor_non_bg = tf.greater(labels_a, 0)                   # (B,B,B)
+
+    mask = tf.logical_and(distinct, tf.logical_and(labels_equal_ap, anchor_non_bg))
+    mask = tf.logical_and(mask, labels_not_equal_an)
+    return mask
 
 
 @dataclass
@@ -230,8 +298,8 @@ class PixelTripletLoss(Loss):
         # Get the pairwise distance matrix using the configured metric
         pairwise_dist = self._compute_pairwise_distances(embeddings)
         
-        # For each anchor, get the hardest positive
-        mask_anchor_positive = _get_anchor_positive_triplet_mask(labels)
+        # For each anchor, get the hardest positive (exclude background positives)
+        mask_anchor_positive = _get_anchor_positive_triplet_mask_exclude_background(labels)
         mask_anchor_positive = keras.ops.cast(mask_anchor_positive, "float32")
         
         # We put to 0 any element where (a, p) is not valid 
@@ -240,7 +308,7 @@ class PixelTripletLoss(Loss):
         # shape (batch_size, 1)
         hardest_positive_dist = tf.reduce_max(anchor_positive_dist, axis=1, keepdims=True)
         
-        # For each anchor, get the hardest negative
+        # For each anchor, get the hardest negative (background allowed as negative)
         mask_anchor_negative = _get_anchor_negative_triplet_mask(labels)
         mask_anchor_negative = keras.ops.cast(mask_anchor_negative, "float32")
         
@@ -280,8 +348,8 @@ class PixelTripletLoss(Loss):
         # Compute a 3D tensor of size (batch_size, batch_size, batch_size)
         triplet_loss = anchor_positive_dist - anchor_negative_dist + self.config.margin
         
-        # Put to zero the invalid triplets
-        mask = _get_triplet_mask(labels)
+        # Put to zero the invalid triplets (exclude background positives)
+        mask = _get_triplet_mask_exclude_background(labels)
         mask = keras.ops.cast(mask, "float32")
         triplet_loss = tf.multiply(mask, triplet_loss)
         
@@ -903,4 +971,4 @@ def create_pixel_triplet_loss(
         remove_easy_triplets=remove_easy_triplets,
         **kwargs
     )
-    return PixelTripletLoss(config=config) 
+    return PixelTripletLoss(config=config)
