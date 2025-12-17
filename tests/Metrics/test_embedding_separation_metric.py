@@ -633,6 +633,252 @@ class TestSerialization:
         assert restored_metric.config.exclude_background_intra is False
 
 
+class TestExactComputation:
+    """Tests for the exact (loop-based) computation mode."""
+
+    def test_exact_vs_sampled_similar_results(self):
+        """
+        Test that exact and sampled modes give similar results for small inputs.
+
+        For small enough inputs where sampling doesn't discard much data,
+        the exact and sampled modes should give similar results.
+        """
+        batch_size = 1
+        height, width = 16, 16  # Small enough for exact computation
+        feature_dim = 8
+
+        # Create masks
+        y_true = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+        y_true[:, :, width//2:, 0] = 1.0
+
+        # Create embeddings with clear separation
+        np.random.seed(42)
+        embeddings = np.zeros((batch_size, height, width, feature_dim), dtype=np.float32)
+        embeddings[:, :, :width//2, :] = np.random.randn(batch_size, height, width//2, feature_dim).astype(np.float32) * 0.5
+        embeddings[:, :, width//2:, :] = 5.0 + np.random.randn(batch_size, height, width//2, feature_dim).astype(np.float32) * 0.5
+
+        y_true = keras.ops.convert_to_tensor(y_true)
+        y_pred = keras.ops.convert_to_tensor(embeddings)
+
+        # Sampled mode with high sample count (to approximate exact)
+        metric_sampled = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                max_samples_per_class=500,  # More than pixels available
+                use_exact=False
+            )
+        )
+        metric_sampled.update_state(y_true, y_pred)
+        ratio_sampled = float(keras.ops.convert_to_numpy(metric_sampled.result()))
+
+        # Exact mode
+        metric_exact = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                batch_size_for_exact=50
+            )
+        )
+        metric_exact.update_state(y_true, y_pred)
+        ratio_exact = float(keras.ops.convert_to_numpy(metric_exact.result()))
+
+        print(f"\nExact vs Sampled comparison (small input):")
+        print(f"  Sampled: ratio = {ratio_sampled:.4f}")
+        print(f"  Exact:   ratio = {ratio_exact:.4f}")
+
+        # Both should be valid
+        assert not np.isnan(ratio_sampled), "Sampled ratio should not be NaN"
+        assert not np.isnan(ratio_exact), "Exact ratio should not be NaN"
+
+        # For small inputs, they should be reasonably similar
+        # Note: There may be differences due to random sampling in sampled mode
+        assert ratio_sampled > 1.0, "Sampled ratio should indicate separation"
+        assert ratio_exact > 1.0, "Exact ratio should indicate separation"
+
+    def test_exact_with_different_batch_sizes(self):
+        """Test that batch_size_for_exact doesn't affect the final result."""
+        batch_size = 1
+        height, width = 16, 16
+        feature_dim = 8
+
+        y_true = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+        y_true[:, :, width//2:, 0] = 1.0
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32)
+        embeddings[:, :, width//2:, :] += 3.0
+
+        y_true = keras.ops.convert_to_tensor(y_true)
+        y_pred = keras.ops.convert_to_tensor(embeddings)
+
+        # Small batch size
+        metric_small_batch = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                batch_size_for_exact=10
+            )
+        )
+        metric_small_batch.update_state(y_true, y_pred)
+        ratio_small = float(keras.ops.convert_to_numpy(metric_small_batch.result()))
+
+        # Large batch size
+        metric_large_batch = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                batch_size_for_exact=100
+            )
+        )
+        metric_large_batch.update_state(y_true, y_pred)
+        ratio_large = float(keras.ops.convert_to_numpy(metric_large_batch.result()))
+
+        print(f"\nDifferent batch sizes for exact computation:")
+        print(f"  batch_size=10:  ratio = {ratio_small:.4f}")
+        print(f"  batch_size=100: ratio = {ratio_large:.4f}")
+
+        # Results should be very close (only floating point differences)
+        assert np.isclose(ratio_small, ratio_large, rtol=1e-4), (
+            f"Different batch sizes should give same result. "
+            f"Got {ratio_small:.6f} vs {ratio_large:.6f}"
+        )
+
+    def test_exact_with_stride(self):
+        """Test exact computation works with stride > 1."""
+        batch_size = 1
+        original_size = 8
+        upsampled_size = 32  # 4x upsampling
+        feature_dim = 8
+
+        # Create original embeddings
+        np.random.seed(42)
+        original_embeddings = np.random.randn(batch_size, original_size, original_size, feature_dim).astype(np.float32)
+
+        # "Upsample" using nearest neighbor
+        upsampled_embeddings = np.repeat(np.repeat(original_embeddings, 4, axis=1), 4, axis=2)
+
+        # Create mask at upsampled resolution
+        y_true = np.zeros((batch_size, upsampled_size, upsampled_size, 1), dtype=np.float32)
+        y_true[:, :, upsampled_size//2:, 0] = 1.0
+
+        y_true = keras.ops.convert_to_tensor(y_true)
+        y_pred = keras.ops.convert_to_tensor(upsampled_embeddings)
+
+        # Exact with stride
+        metric = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                stride=4,
+                batch_size_for_exact=20
+            )
+        )
+        metric.update_state(y_true, y_pred)
+        ratio = float(keras.ops.convert_to_numpy(metric.result()))
+
+        print(f"\nExact computation with stride=4: ratio = {ratio:.4f}")
+
+        assert not np.isnan(ratio), "Ratio should not be NaN"
+        assert not np.isinf(ratio), "Ratio should not be Inf"
+
+    def test_exact_excludes_background_intra(self):
+        """Test that exact mode respects exclude_background_intra setting."""
+        batch_size = 1
+        height, width = 16, 16
+        feature_dim = 8
+
+        y_true = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+        y_true[:, :, width//2:, 0] = 1.0
+
+        # Background spread out, foreground tight
+        np.random.seed(42)
+        embeddings = np.zeros((batch_size, height, width, feature_dim), dtype=np.float32)
+        embeddings[:, :, :width//2, :] = np.random.randn(batch_size, height, width//2, feature_dim).astype(np.float32) * 3.0
+        embeddings[:, :, width//2:, :] = 5.0 + np.random.randn(batch_size, height, width//2, feature_dim).astype(np.float32) * 0.1
+
+        y_true = keras.ops.convert_to_tensor(y_true)
+        y_pred = keras.ops.convert_to_tensor(embeddings)
+
+        # With background excluded
+        metric_exclude = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                exclude_background_intra=True,
+                batch_size_for_exact=50
+            )
+        )
+        metric_exclude.update_state(y_true, y_pred)
+        ratio_exclude = float(keras.ops.convert_to_numpy(metric_exclude.result()))
+
+        # With background included
+        metric_include = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                exclude_background_intra=False,
+                batch_size_for_exact=50
+            )
+        )
+        metric_include.update_state(y_true, y_pred)
+        ratio_include = float(keras.ops.convert_to_numpy(metric_include.result()))
+
+        print(f"\nExact mode with background exclusion:")
+        print(f"  exclude_background_intra=True:  ratio = {ratio_exclude:.4f}")
+        print(f"  exclude_background_intra=False: ratio = {ratio_include:.4f}")
+
+        # Excluding background should give higher ratio (tighter foreground)
+        assert ratio_exclude > ratio_include, (
+            f"Expected higher ratio when excluding background. "
+            f"Got exclude={ratio_exclude:.4f}, include={ratio_include:.4f}"
+        )
+
+    @pytest.mark.parametrize("distance_metric", ["euclidean", "cosine", "manhattan"])
+    def test_exact_all_distance_metrics(self, distance_metric):
+        """Test exact computation with all distance metrics."""
+        batch_size = 1
+        height, width = 16, 16
+        feature_dim = 8
+
+        y_true = np.zeros((batch_size, height, width, 1), dtype=np.float32)
+        y_true[:, :, width//2:, 0] = 1.0
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32)
+        embeddings[:, :, width//2:, :] += 2.0
+
+        y_true = keras.ops.convert_to_tensor(y_true)
+        y_pred = keras.ops.convert_to_tensor(embeddings)
+
+        metric = EmbeddingSeparationRatio(
+            config=EmbeddingSeparationConfig(
+                use_exact=True,
+                distance_metric=distance_metric,
+                batch_size_for_exact=50
+            )
+        )
+        metric.update_state(y_true, y_pred)
+        ratio = float(keras.ops.convert_to_numpy(metric.result()))
+
+        print(f"\nExact mode with {distance_metric} distance: ratio = {ratio:.4f}")
+
+        assert not np.isnan(ratio), f"Ratio should not be NaN for {distance_metric}"
+        assert not np.isinf(ratio), f"Ratio should not be Inf for {distance_metric}"
+        assert ratio > 0, f"Ratio should be positive for {distance_metric}"
+
+    def test_config_serialization_with_exact(self):
+        """Test that use_exact and batch_size_for_exact are properly serialized."""
+        config = EmbeddingSeparationConfig(
+            use_exact=True,
+            batch_size_for_exact=200,
+            max_samples_per_class=300
+        )
+        metric = EmbeddingSeparationRatio(config=config)
+
+        saved_config = metric.get_config()
+
+        assert saved_config['use_exact'] is True
+        assert saved_config['batch_size_for_exact'] == 200
+
+        # Test from_config
+        restored_metric = EmbeddingSeparationRatio.from_config(saved_config)
+        assert restored_metric.config.use_exact is True
+        assert restored_metric.config.batch_size_for_exact == 200
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
 

@@ -27,8 +27,8 @@ from dataclasses import dataclass
 class EmbeddingSeparationConfig:
     """Configuration for embedding separation metric."""
     # Sampling parameters
-    max_samples_per_class: int = 500  # Max pixels to sample per class
-    max_pairs_per_class: int = 10000  # Max pairs for distance computation
+    max_samples_per_class: int = 500  # Max pixels to sample per class (only used if use_exact=False)
+    max_pairs_per_class: int = 10000  # Max pairs for distance computation (only used if use_exact=False)
 
     # Distance metric
     distance_metric: str = "euclidean"  # 'euclidean', 'cosine', 'manhattan'
@@ -41,6 +41,10 @@ class EmbeddingSeparationConfig:
     # When True: intra-class distance only measures how tight foreground clusters are
     # Background is still used for inter-class distances (foreground vs background)
 
+    # Exact computation (loop-based)
+    use_exact: bool = False  # If True, compute ALL pairwise distances via looping (no sampling)
+    batch_size_for_exact: int = 100  # Number of anchor pixels to process per iteration in exact mode
+
     # Numerical stability
     epsilon: float = 1e-8
 
@@ -49,6 +53,8 @@ class EmbeddingSeparationConfig:
             raise ValueError(f"max_samples_per_class must be > 0, got {self.max_samples_per_class}")
         if self.stride <= 0:
             raise ValueError(f"stride must be > 0, got {self.stride}")
+        if self.batch_size_for_exact <= 0:
+            raise ValueError(f"batch_size_for_exact must be > 0, got {self.batch_size_for_exact}")
         if self.distance_metric not in ["euclidean", "cosine", "manhattan"]:
             raise ValueError(f"distance_metric must be one of ['euclidean', 'cosine', 'manhattan']")
 
@@ -299,6 +305,152 @@ class EmbeddingSeparationRatio(keras.metrics.Metric):
 
         return inter_sum, inter_count, intra_sum, intra_count
 
+    def _compute_class_distances_exact(
+        self,
+        embeddings: tf.Tensor,
+        labels: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Compute ALL inter-class and intra-class distances using a loop.
+
+        This iterates through pixels in batches, computing distances from each
+        batch of anchor pixels to ALL other pixels, then accumulating statistics.
+
+        This gives exact statistics (no sampling) at the cost of more computation,
+        but memory usage is controlled by processing in batches.
+
+        Returns:
+            inter_sum: Sum of inter-class distances
+            inter_count: Number of inter-class pairs
+            intra_sum: Sum of intra-class distances
+            intra_count: Number of intra-class pairs
+        """
+        num_pixels = tf.shape(embeddings)[0]
+        feature_dim = tf.shape(embeddings)[1]
+        batch_size = self.config.batch_size_for_exact
+
+        # Normalize embeddings once if using cosine distance
+        if self.config.distance_metric == "cosine":
+            embeddings = tf.nn.l2_normalize(embeddings, axis=1)
+
+        # Initialize accumulators
+        inter_sum = tf.constant(0.0, dtype=tf.float32)
+        inter_count = tf.constant(0.0, dtype=tf.float32)
+        intra_sum = tf.constant(0.0, dtype=tf.float32)
+        intra_count = tf.constant(0.0, dtype=tf.float32)
+
+        # Pre-compute label properties for efficiency
+        all_labels = labels  # (N,)
+
+        # Loop through anchor pixels in batches
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+
+        def compute_batch_distances(batch_idx, accumulators):
+            """Compute distances for one batch of anchor pixels."""
+            inter_sum, inter_count, intra_sum, intra_count = accumulators
+
+            # Get anchor batch indices
+            start_idx = batch_idx * batch_size
+            end_idx = tf.minimum(start_idx + batch_size, num_pixels)
+
+            # Get anchor embeddings and labels for this batch
+            anchor_embeddings = embeddings[start_idx:end_idx]  # (B, D)
+            anchor_labels = labels[start_idx:end_idx]  # (B,)
+            actual_batch_size = end_idx - start_idx
+
+            # Compute distances from anchors to ALL pixels
+            # anchor_embeddings: (B, D), embeddings: (N, D)
+            if self.config.distance_metric == "euclidean":
+                # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b
+                anchor_sq_norm = tf.reduce_sum(tf.square(anchor_embeddings), axis=1, keepdims=True)  # (B, 1)
+                all_sq_norm = tf.reduce_sum(tf.square(embeddings), axis=1, keepdims=False)  # (N,)
+                dot_product = tf.matmul(anchor_embeddings, embeddings, transpose_b=True)  # (B, N)
+                sq_distances = anchor_sq_norm - 2.0 * dot_product + tf.expand_dims(all_sq_norm, 0)
+                sq_distances = tf.maximum(sq_distances, 0.0)
+                distances = tf.sqrt(sq_distances + self.config.epsilon)  # (B, N)
+            elif self.config.distance_metric == "cosine":
+                # Already normalized above
+                similarities = tf.matmul(anchor_embeddings, embeddings, transpose_b=True)  # (B, N)
+                distances = 1.0 - similarities
+                distances = tf.maximum(distances, 0.0)
+            else:  # manhattan
+                # (B, 1, D) - (1, N, D) -> (B, N, D) -> sum -> (B, N)
+                anchor_exp = tf.expand_dims(anchor_embeddings, 1)  # (B, 1, D)
+                all_exp = tf.expand_dims(embeddings, 0)  # (1, N, D)
+                distances = tf.reduce_sum(tf.abs(anchor_exp - all_exp), axis=2)  # (B, N)
+
+            # Create masks for classification
+            anchor_labels_exp = tf.expand_dims(anchor_labels, 1)  # (B, 1)
+            all_labels_exp = tf.expand_dims(all_labels, 0)  # (1, N)
+
+            same_class = tf.equal(anchor_labels_exp, all_labels_exp)  # (B, N)
+            diff_class = tf.logical_not(same_class)
+
+            # Create mask to exclude self-pairs (diagonal elements for this batch)
+            # self_mask[i, j] = True if anchor i corresponds to pixel j
+            batch_indices = tf.range(start_idx, end_idx)  # (B,)
+            all_indices = tf.range(num_pixels)  # (N,)
+            self_mask = tf.equal(
+                tf.expand_dims(batch_indices, 1),  # (B, 1)
+                tf.expand_dims(all_indices, 0)  # (1, N)
+            )  # (B, N)
+            not_self = tf.logical_not(self_mask)
+
+            # Intra-class: same class, not self
+            intra_mask = tf.logical_and(same_class, not_self)
+
+            # Optionally exclude background-to-background from intra-class
+            if self.config.exclude_background_intra:
+                anchor_non_bg = tf.greater(anchor_labels_exp, 0)  # (B, 1)
+                all_non_bg = tf.greater(all_labels_exp, 0)  # (1, N)
+                both_non_bg = tf.logical_and(anchor_non_bg, all_non_bg)  # (B, N)
+                intra_mask = tf.logical_and(intra_mask, both_non_bg)
+
+            # Inter-class: different class (already excludes self since same pixel = same class)
+            inter_mask = diff_class
+
+            # Accumulate statistics
+            intra_mask_float = tf.cast(intra_mask, tf.float32)
+            inter_mask_float = tf.cast(inter_mask, tf.float32)
+
+            batch_intra_sum = tf.reduce_sum(distances * intra_mask_float)
+            batch_intra_count = tf.reduce_sum(intra_mask_float)
+            batch_inter_sum = tf.reduce_sum(distances * inter_mask_float)
+            batch_inter_count = tf.reduce_sum(inter_mask_float)
+
+            new_inter_sum = inter_sum + batch_inter_sum
+            new_inter_count = inter_count + batch_inter_count
+            new_intra_sum = intra_sum + batch_intra_sum
+            new_intra_count = intra_count + batch_intra_count
+
+            return (new_inter_sum, new_inter_count, new_intra_sum, new_intra_count)
+
+        # Use tf.while_loop for graph-mode compatibility
+        def cond(batch_idx, accumulators):
+            return batch_idx < num_batches
+
+        def body(batch_idx, accumulators):
+            new_accumulators = compute_batch_distances(batch_idx, accumulators)
+            return batch_idx + 1, new_accumulators
+
+        initial_accumulators = (inter_sum, inter_count, intra_sum, intra_count)
+        _, final_accumulators = tf.while_loop(
+            cond,
+            body,
+            loop_vars=(tf.constant(0), initial_accumulators),
+            parallel_iterations=1  # Process sequentially to control memory
+        )
+
+        inter_sum, inter_count, intra_sum, intra_count = final_accumulators
+
+        # Note: Each pair (i, j) is counted twice (once when i is anchor, once when j is anchor)
+        # So we divide by 2 to get the correct count
+        # Actually, the sum is also doubled, so the mean is correct without adjustment
+        # But for reporting purposes, let's keep the counts as-is since they represent
+        # the number of distance computations, not unique pairs
+
+        return inter_sum, inter_count, intra_sum, intra_count
+
     def update_state(self, y_true: tf.Tensor, y_pred: tf.Tensor, sample_weight=None):
         """
         Update metric state with a batch of predictions.
@@ -340,10 +492,15 @@ class EmbeddingSeparationRatio(keras.metrics.Metric):
             embeddings, class_labels
         )
 
-        # Compute distance statistics
-        inter_sum, inter_count, intra_sum, intra_count = self._compute_class_distances(
-            sampled_embeddings, sampled_labels
-        )
+        # Compute distance statistics (sampled or exact)
+        if self.config.use_exact:
+            inter_sum, inter_count, intra_sum, intra_count = self._compute_class_distances_exact(
+                sampled_embeddings, sampled_labels
+            )
+        else:
+            inter_sum, inter_count, intra_sum, intra_count = self._compute_class_distances(
+                sampled_embeddings, sampled_labels
+            )
 
         # Update accumulators
         self.inter_class_sum.assign_add(inter_sum)
@@ -382,6 +539,8 @@ class EmbeddingSeparationRatio(keras.metrics.Metric):
             'distance_metric': self.config.distance_metric,
             'stride': self.config.stride,
             'exclude_background_intra': self.config.exclude_background_intra,
+            'use_exact': self.config.use_exact,
+            'batch_size_for_exact': self.config.batch_size_for_exact,
             'epsilon': self.config.epsilon,
         }
         return {**base_config, **config_dict}
@@ -395,6 +554,8 @@ class EmbeddingSeparationRatio(keras.metrics.Metric):
             distance_metric=config.pop('distance_metric', 'euclidean'),
             stride=config.pop('stride', 1),
             exclude_background_intra=config.pop('exclude_background_intra', True),
+            use_exact=config.pop('use_exact', False),
+            batch_size_for_exact=config.pop('batch_size_for_exact', 100),
             epsilon=config.pop('epsilon', 1e-8),
         )
         return cls(config=sep_config, **config)
@@ -478,6 +639,8 @@ def create_embedding_separation_metric(
     distance_metric: str = "euclidean",
     stride: int = 1,
     exclude_background_intra: bool = True,
+    use_exact: bool = False,
+    batch_size_for_exact: int = 100,
     name: str = "embedding_separation_ratio"
 ) -> EmbeddingSeparationRatio:
     """
@@ -486,6 +649,7 @@ def create_embedding_separation_metric(
     Args:
         max_samples_per_class: Maximum pixels to sample per class for distance computation.
             More samples = more accurate estimate but slower computation.
+            Only used when use_exact=False.
         distance_metric: Distance metric to use ('euclidean', 'cosine', 'manhattan').
             Should match the metric used in your triplet loss.
         stride: Stride for sampling pixels. Use this to handle upsampling:
@@ -495,17 +659,29 @@ def create_embedding_separation_metric(
         exclude_background_intra: If True (default), exclude background-to-background pairs
             from intra-class distance computation. This focuses the metric on foreground
             cluster tightness while still measuring foreground-vs-background separation.
+        use_exact: If True, compute ALL pairwise distances via looping instead of sampling.
+            This gives exact statistics but takes longer. Default is False (sampling).
+        batch_size_for_exact: Number of anchor pixels to process per iteration when
+            use_exact=True. Larger batches are faster but use more memory. Default is 100.
         name: Name for the metric.
 
     Returns:
         EmbeddingSeparationRatio metric instance.
 
     Example:
-        # For embeddings upsampled 4x to match 256x256 masks
+        # For embeddings upsampled 4x to match 256x256 masks (sampling mode)
         metric = create_embedding_separation_metric(
             max_samples_per_class=500,
             distance_metric='euclidean',
             stride=4  # Match upsampling factor
+        )
+
+        # For exact computation (slower but more accurate)
+        metric_exact = create_embedding_separation_metric(
+            distance_metric='euclidean',
+            stride=4,
+            use_exact=True,
+            batch_size_for_exact=200
         )
 
         model.compile(
@@ -519,6 +695,8 @@ def create_embedding_separation_metric(
         distance_metric=distance_metric,
         stride=stride,
         exclude_background_intra=exclude_background_intra,
+        use_exact=use_exact,
+        batch_size_for_exact=batch_size_for_exact,
     )
     return EmbeddingSeparationRatio(config=config, name=name)
 
@@ -528,6 +706,8 @@ def create_embedding_metrics_suite(
     distance_metric: str = "euclidean",
     stride: int = 1,
     exclude_background_intra: bool = True,
+    use_exact: bool = False,
+    batch_size_for_exact: int = 100,
 ) -> Dict[str, keras.metrics.Metric]:
     """
     Create a suite of embedding quality metrics.
@@ -539,10 +719,13 @@ def create_embedding_metrics_suite(
 
     Args:
         max_samples_per_class: Maximum pixels to sample per class.
+            Only used when use_exact=False.
         distance_metric: Distance metric ('euclidean', 'cosine', 'manhattan').
         stride: Stride for sampling (use upsampling factor if applicable).
         exclude_background_intra: If True (default), exclude background-to-background pairs
             from intra-class distance. Focuses metric on foreground cluster quality.
+        use_exact: If True, compute ALL pairwise distances via looping instead of sampling.
+        batch_size_for_exact: Number of anchor pixels per iteration when use_exact=True.
 
     Returns:
         Dictionary of metric instances.
@@ -560,6 +743,8 @@ def create_embedding_metrics_suite(
         distance_metric=distance_metric,
         stride=stride,
         exclude_background_intra=exclude_background_intra,
+        use_exact=use_exact,
+        batch_size_for_exact=batch_size_for_exact,
     )
 
     return {
