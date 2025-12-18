@@ -118,6 +118,10 @@ class PixelTripletConfig:
     remove_easy_triplets: bool = False  # Whether to exclude easy triplets in batch_all mode
     memory_warning_threshold: int = 10_000_000  # Warn if pairwise matrix > 10M elements
     
+    # Exact computation (loop-based) - avoids memory issues with large images
+    use_exact: bool = False  # If True, compute distances via looping instead of full pairwise matrix
+    batch_size_for_exact: int = 100  # Number of anchor pixels to process per iteration in exact mode
+
     def __post_init__(self):
         if self.margin <= 0:
             raise ValueError(f"margin must be > 0, got {self.margin}")
@@ -133,7 +137,9 @@ class PixelTripletConfig:
             raise ValueError(f"triplet_strategy must be one of ['hard', 'semi_hard', 'all'], got {self.triplet_strategy}")
         if self.reduction not in ["mean", "sum", "none"]:
             raise ValueError(f"reduction must be one of ['mean', 'sum', 'none'], got {self.reduction}")
-        
+        if self.batch_size_for_exact <= 0:
+            raise ValueError(f"batch_size_for_exact must be > 0, got {self.batch_size_for_exact}")
+
         # Provide guidance on the new parameters
         if self.use_balanced_sampling and self.max_samples_per_class is None:
             # Set a reasonable default based on legacy parameters
@@ -198,6 +204,8 @@ class PixelTripletLoss(Loss):
             'reduction': self.config.reduction,
             'remove_easy_triplets': self.config.remove_easy_triplets,
             'memory_warning_threshold': self.config.memory_warning_threshold,
+            'use_exact': self.config.use_exact,
+            'batch_size_for_exact': self.config.batch_size_for_exact,
         }
         return {**base_config, **config_dict}
     
@@ -217,6 +225,8 @@ class PixelTripletLoss(Loss):
             reduction=config.pop('reduction', 'mean'),
             remove_easy_triplets=config.pop('remove_easy_triplets', False),
             memory_warning_threshold=config.pop('memory_warning_threshold', 10_000_000),
+            use_exact=config.pop('use_exact', False),
+            batch_size_for_exact=config.pop('batch_size_for_exact', 100),
         )
         return cls(config=triplet_config, **config)
     
@@ -373,6 +383,376 @@ class PixelTripletLoss(Loss):
         
         return triplet_loss
 
+    def _compute_distances_from_anchors(
+        self,
+        anchor_embeddings: tf.Tensor,
+        all_embeddings: tf.Tensor
+    ) -> tf.Tensor:
+        """
+        Compute distances from anchor embeddings to all embeddings.
+
+        Args:
+            anchor_embeddings: (B, D) tensor of anchor embeddings
+            all_embeddings: (N, D) tensor of all embeddings
+
+        Returns:
+            distances: (B, N) tensor of distances
+        """
+        if self.config.distance_metric == "euclidean":
+            # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b
+            anchor_sq_norm = tf.reduce_sum(tf.square(anchor_embeddings), axis=1, keepdims=True)  # (B, 1)
+            all_sq_norm = tf.reduce_sum(tf.square(all_embeddings), axis=1)  # (N,)
+            dot_product = tf.matmul(anchor_embeddings, all_embeddings, transpose_b=True)  # (B, N)
+            sq_distances = anchor_sq_norm - 2.0 * dot_product + tf.expand_dims(all_sq_norm, 0)
+            sq_distances = tf.maximum(sq_distances, 0.0)
+            return tf.sqrt(sq_distances + 1e-16)
+        elif self.config.distance_metric == "cosine":
+            # Normalize embeddings
+            anchor_norm = tf.nn.l2_normalize(anchor_embeddings, axis=1)
+            all_norm = tf.nn.l2_normalize(all_embeddings, axis=1)
+            similarities = tf.matmul(anchor_norm, all_norm, transpose_b=True)
+            return tf.maximum(1.0 - similarities, 0.0)
+        else:  # manhattan
+            anchor_exp = tf.expand_dims(anchor_embeddings, 1)  # (B, 1, D)
+            all_exp = tf.expand_dims(all_embeddings, 0)  # (1, N, D)
+            return tf.reduce_sum(tf.abs(anchor_exp - all_exp), axis=2)
+
+    def _batch_hard_triplet_loss_exact(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Batch hard triplet loss using loop-based exact computation.
+
+        This iterates through anchors in batches, computing the hardest positive
+        and hardest negative for each anchor against ALL other embeddings.
+
+        Memory usage is O(batch_size * N) instead of O(N^2).
+        """
+        num_pixels = tf.shape(embeddings)[0]
+        batch_size = self.config.batch_size_for_exact
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+
+        # Pre-compute label properties
+        all_labels = labels  # (N,)
+
+        # Initialize accumulators
+        loss_sum = tf.constant(0.0, dtype=tf.float32)
+        valid_anchor_count = tf.constant(0.0, dtype=tf.float32)
+
+        def compute_batch_loss(batch_idx, accumulators):
+            """Compute hard triplet loss for one batch of anchors."""
+            loss_sum, valid_anchor_count = accumulators
+
+            start_idx = batch_idx * batch_size
+            end_idx = tf.minimum(start_idx + batch_size, num_pixels)
+
+            anchor_embeddings = embeddings[start_idx:end_idx]  # (B, D)
+            anchor_labels = labels[start_idx:end_idx]  # (B,)
+            actual_batch_size = end_idx - start_idx
+
+            # Compute distances from anchors to all pixels
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)  # (B, N)
+
+            # Create label masks
+            anchor_labels_exp = tf.expand_dims(anchor_labels, 1)  # (B, 1)
+            all_labels_exp = tf.expand_dims(all_labels, 0)  # (1, N)
+
+            # Positive mask: same class, not self, anchor is non-background
+            same_class = tf.equal(anchor_labels_exp, all_labels_exp)  # (B, N)
+            anchor_non_bg = tf.greater(anchor_labels, 0)  # (B,) - anchors must be non-background
+            anchor_non_bg_exp = tf.expand_dims(anchor_non_bg, 1)  # (B, 1)
+
+            # Self mask
+            batch_indices = tf.range(start_idx, end_idx)
+            all_indices = tf.range(num_pixels)
+            self_mask = tf.equal(
+                tf.expand_dims(batch_indices, 1),
+                tf.expand_dims(all_indices, 0)
+            )
+            not_self = tf.logical_not(self_mask)
+
+            # Valid positive: same class, not self, anchor is foreground
+            positive_mask = tf.logical_and(same_class, not_self)
+            positive_mask = tf.logical_and(positive_mask, anchor_non_bg_exp)
+
+            # Negative mask: different class
+            negative_mask = tf.logical_not(same_class)
+
+            # For hardest positive: max distance among positives
+            positive_mask_float = tf.cast(positive_mask, tf.float32)
+            # Set invalid positions to -inf for max
+            masked_positive_dist = distances * positive_mask_float + (1.0 - positive_mask_float) * (-1e9)
+            hardest_positive_dist = tf.reduce_max(masked_positive_dist, axis=1)  # (B,)
+
+            # For hardest negative: min distance among negatives
+            negative_mask_float = tf.cast(negative_mask, tf.float32)
+            # Set invalid positions to +inf for min
+            masked_negative_dist = distances + (1.0 - negative_mask_float) * 1e9
+            hardest_negative_dist = tf.reduce_min(masked_negative_dist, axis=1)  # (B,)
+
+            # Scaling factor (mean of negative distances)
+            scaling = tf.reduce_sum(distances * negative_mask_float, axis=1) / (tf.reduce_sum(negative_mask_float, axis=1) + 1e-16)
+
+            # Compute triplet loss for each anchor
+            triplet_loss = tf.maximum(
+                (hardest_positive_dist - hardest_negative_dist) / (scaling + 1e-16) + self.config.margin,
+                0.0
+            )
+
+            # Only count anchors that have valid positives (foreground anchors with same-class pixels)
+            has_valid_positive = tf.reduce_any(positive_mask, axis=1)  # (B,)
+            has_valid_negative = tf.reduce_any(negative_mask, axis=1)  # (B,)
+            valid_anchor = tf.logical_and(has_valid_positive, has_valid_negative)
+            valid_anchor_float = tf.cast(valid_anchor, tf.float32)
+
+            batch_loss = tf.reduce_sum(triplet_loss * valid_anchor_float)
+            batch_count = tf.reduce_sum(valid_anchor_float)
+
+            return (loss_sum + batch_loss, valid_anchor_count + batch_count)
+
+        # Loop through batches
+        def cond(batch_idx, accumulators):
+            return batch_idx < num_batches
+
+        def body(batch_idx, accumulators):
+            new_accumulators = compute_batch_loss(batch_idx, accumulators)
+            return batch_idx + 1, new_accumulators
+
+        _, (final_loss_sum, final_count) = tf.while_loop(
+            cond,
+            body,
+            loop_vars=(tf.constant(0), (loss_sum, valid_anchor_count)),
+            parallel_iterations=1
+        )
+
+        return final_loss_sum / (final_count + 1e-16)
+
+    def _batch_all_triplet_loss_exact(self, labels: tf.Tensor, embeddings: tf.Tensor) -> tf.Tensor:
+        """
+        Batch all triplet loss using loop-based exact computation.
+
+        This iterates through anchors in batches, and for each anchor iterates
+        through its positives, computing triplet loss against ALL negatives.
+
+        When remove_easy_triplets=True, we properly compute max(0, d_ap - d_an + margin)
+        for each individual triplet before summing.
+
+        When remove_easy_triplets=False, we can use an efficient approximation
+        since all triplets contribute to the gradient.
+
+        Memory usage is O(batch_size * N) instead of O(N^3).
+        """
+        num_pixels = tf.shape(embeddings)[0]
+        batch_size = self.config.batch_size_for_exact
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+
+        all_labels = labels
+
+        # Initialize accumulators
+        loss_sum = tf.constant(0.0, dtype=tf.float32)
+        triplet_count = tf.constant(0.0, dtype=tf.float32)
+        positive_triplet_count = tf.constant(0.0, dtype=tf.float32)  # For remove_easy_triplets
+
+        def compute_batch_loss(batch_idx, accumulators):
+            """Compute batch all triplet loss for one batch of anchors."""
+            loss_sum, triplet_count, positive_triplet_count = accumulators
+
+            start_idx = batch_idx * batch_size
+            end_idx = tf.minimum(start_idx + batch_size, num_pixels)
+
+            anchor_embeddings = embeddings[start_idx:end_idx]  # (B, D)
+            anchor_labels = labels[start_idx:end_idx]  # (B,)
+            actual_batch_size = end_idx - start_idx
+
+            # Compute distances from anchors to all pixels
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)  # (B, N)
+
+            # Create label masks
+            anchor_labels_exp = tf.expand_dims(anchor_labels, 1)  # (B, 1)
+            all_labels_exp = tf.expand_dims(all_labels, 0)  # (1, N)
+
+            same_class = tf.equal(anchor_labels_exp, all_labels_exp)  # (B, N)
+            diff_class = tf.logical_not(same_class)
+
+            # Anchor must be non-background
+            anchor_non_bg = tf.greater(anchor_labels, 0)  # (B,)
+            anchor_non_bg_exp = tf.expand_dims(anchor_non_bg, 1)  # (B, 1)
+
+            # Self mask
+            batch_indices = tf.range(start_idx, end_idx)
+            all_indices = tf.range(num_pixels)
+            self_mask = tf.equal(
+                tf.expand_dims(batch_indices, 1),
+                tf.expand_dims(all_indices, 0)
+            )
+            not_self = tf.logical_not(self_mask)
+
+            # Valid positive: same class, not self, anchor is foreground
+            positive_mask = tf.logical_and(same_class, not_self)
+            positive_mask = tf.logical_and(positive_mask, anchor_non_bg_exp)  # (B, N)
+
+            # Valid negative: different class
+            negative_mask = diff_class  # (B, N)
+
+            positive_mask_float = tf.cast(positive_mask, tf.float32)
+            negative_mask_float = tf.cast(negative_mask, tf.float32)
+
+            # Count positives and negatives per anchor
+            pos_count = tf.reduce_sum(positive_mask_float, axis=1)  # (B,)
+            neg_count = tf.reduce_sum(negative_mask_float, axis=1)  # (B,)
+
+            if self.config.remove_easy_triplets:
+                # Need to compute each triplet loss individually: max(0, d_ap - d_an + margin)
+                # For each anchor, for each positive, compute loss against all negatives
+
+                # d_ap: (B, N) distances to positives (masked)
+                # d_an: (B, N) distances to negatives (masked)
+
+                # For each anchor i with positive j:
+                #   triplet_loss_ij = sum over negatives k of: max(0, d[i,j] - d[i,k] + margin)
+
+                # Expand for broadcasting:
+                # d_ap: (B, N_pos, 1) - need to iterate over positives
+                # d_an: (B, 1, N_neg) - all negatives
+
+                # To avoid B*N*N tensor, we compute per-anchor contribution
+                # For each anchor: sum of max(0, d_pos - d_neg + margin) over all pos-neg pairs
+
+                # Efficient approach: for each anchor
+                # positive_dists[i] = distances[i] where positive_mask[i] is True
+                # negative_dists[i] = distances[i] where negative_mask[i] is True
+                # Then compute: sum over pos of sum over neg of max(0, pos - neg + margin)
+
+                # This can be rewritten as:
+                # For pos p and neg n: max(0, p - n + margin)
+                # = max(0, p - n + margin)
+                # if p - n + margin > 0: contributes (p - n + margin)
+                # else: contributes 0
+
+                # For each anchor, we can compute this by:
+                # 1. Sort negative distances
+                # 2. For each positive, find how many negatives are "hard" (d_neg < d_pos + margin)
+                # 3. Sum up contributions
+
+                # Simpler but still exact: nested loop with tf.while_loop
+                # For each anchor, for each positive, compute contribution
+
+                # Even simpler: compute all pairwise (pos, neg) differences for each anchor
+                # d_pos_expanded: (B, N, 1) with invalid set to 0
+                # d_neg_expanded: (B, 1, N) with invalid set to large value
+                # diff = d_pos_expanded - d_neg_expanded + margin  # (B, N, N)
+                # But this is B*N*N which we want to avoid
+
+                # Compromise: iterate per anchor within the batch
+                def compute_anchor_loss(anchor_idx):
+                    """Compute triplet loss for a single anchor."""
+                    anchor_distances = distances[anchor_idx]  # (N,)
+                    anchor_pos_mask = positive_mask[anchor_idx]  # (N,)
+                    anchor_neg_mask = negative_mask[anchor_idx]  # (N,)
+
+                    # Get positive and negative distances
+                    pos_indices = tf.where(anchor_pos_mask)[:, 0]
+                    neg_indices = tf.where(anchor_neg_mask)[:, 0]
+
+                    pos_dists = tf.gather(anchor_distances, pos_indices)  # (num_pos,)
+                    neg_dists = tf.gather(anchor_distances, neg_indices)  # (num_neg,)
+
+                    num_pos = tf.shape(pos_dists)[0]
+                    num_neg = tf.shape(neg_dists)[0]
+
+                    # Compute all pairwise triplet losses
+                    # pos_dists: (num_pos,) -> (num_pos, 1)
+                    # neg_dists: (num_neg,) -> (1, num_neg)
+                    pos_expanded = tf.expand_dims(pos_dists, 1)  # (num_pos, 1)
+                    neg_expanded = tf.expand_dims(neg_dists, 0)  # (1, num_neg)
+
+                    # Triplet loss for each pair
+                    triplet_losses = pos_expanded - neg_expanded + self.config.margin  # (num_pos, num_neg)
+                    triplet_losses = tf.maximum(triplet_losses, 0.0)  # Remove easy triplets
+
+                    # Sum all losses and count positive (non-zero) triplets
+                    anchor_loss = tf.reduce_sum(triplet_losses)
+                    anchor_total_triplets = tf.cast(num_pos * num_neg, tf.float32)
+                    anchor_positive_triplets = tf.reduce_sum(tf.cast(triplet_losses > 1e-16, tf.float32))
+
+                    return anchor_loss, anchor_total_triplets, anchor_positive_triplets
+
+                # Map over anchors in this batch
+                anchor_results = tf.map_fn(
+                    compute_anchor_loss,
+                    tf.range(actual_batch_size),
+                    fn_output_signature=(
+                        tf.TensorSpec([], dtype=tf.float32),
+                        tf.TensorSpec([], dtype=tf.float32),
+                        tf.TensorSpec([], dtype=tf.float32),
+                    )
+                )
+
+                batch_loss = tf.reduce_sum(anchor_results[0])
+                batch_total_triplets = tf.reduce_sum(anchor_results[1])
+                batch_positive_triplets = tf.reduce_sum(anchor_results[2])
+
+                return (
+                    loss_sum + batch_loss,
+                    triplet_count + batch_total_triplets,
+                    positive_triplet_count + batch_positive_triplets
+                )
+            else:
+                # Without remove_easy_triplets, we can use the efficient approximation
+                # since all triplets contribute (even negative ones)
+                # Loss = sum over all triplets of (d_ap - d_an + margin)
+                #      = sum over anchors of: (sum_pos d_ap) * num_neg - (sum_neg d_an) * num_pos + margin * num_pos * num_neg
+
+                # Sum of positive distances per anchor
+                pos_dist_sum = tf.reduce_sum(distances * positive_mask_float, axis=1)  # (B,)
+
+                # Sum of negative distances per anchor
+                neg_dist_sum = tf.reduce_sum(distances * negative_mask_float, axis=1)  # (B,)
+
+                # Number of triplets per anchor
+                triplets_per_anchor = pos_count * neg_count  # (B,)
+
+                # Total loss contribution per anchor:
+                # sum over pos,neg of (d_pos - d_neg + margin)
+                # = sum_pos(d_pos) * num_neg - sum_neg(d_neg) * num_pos + margin * num_pos * num_neg
+                anchor_loss = (
+                    pos_dist_sum * neg_count -
+                    neg_dist_sum * pos_count +
+                    self.config.margin * triplets_per_anchor
+                )
+
+                # Only count anchors with valid triplets
+                valid_anchor = triplets_per_anchor > 0
+                valid_anchor_float = tf.cast(valid_anchor, tf.float32)
+
+                batch_loss = tf.reduce_sum(anchor_loss * valid_anchor_float)
+                batch_count = tf.reduce_sum(triplets_per_anchor * valid_anchor_float)
+
+                return (loss_sum + batch_loss, triplet_count + batch_count, positive_triplet_count)
+
+        # Loop through batches
+        def cond(batch_idx, accumulators):
+            return batch_idx < num_batches
+
+        def body(batch_idx, accumulators):
+            new_accumulators = compute_batch_loss(batch_idx, accumulators)
+            return batch_idx + 1, new_accumulators
+
+        initial_accumulators = (loss_sum, triplet_count, positive_triplet_count)
+        _, final_accumulators = tf.while_loop(
+            cond,
+            body,
+            loop_vars=(tf.constant(0), initial_accumulators),
+            parallel_iterations=1
+        )
+
+        final_loss_sum, final_count, final_positive_count = final_accumulators
+
+        if self.config.remove_easy_triplets:
+            # Divide by number of positive (non-zero loss) triplets
+            return final_loss_sum / (final_positive_count + 1e-16)
+        else:
+            # Divide by total number of triplets
+            return final_loss_sum / (final_count + 1e-16)
+
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """
         Compute pixel-based triplet loss.
@@ -454,13 +834,23 @@ class PixelTripletLoss(Loss):
         self._check_memory_usage_simple(sampled_embeddings)
         
         # Use custom triplet loss functions that support different distance metrics
-        if self.config.triplet_strategy == "hard":
-            loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
-        elif self.config.triplet_strategy == "all":
-            loss = self._batch_all_triplet_loss_custom(sampled_labels, sampled_embeddings)
-        else:  # semi_hard - use hard as fallback since semi_hard is complex
-            loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
-        
+        if self.config.use_exact:
+            # Use loop-based exact computation (memory efficient for large images)
+            if self.config.triplet_strategy == "hard":
+                loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+            elif self.config.triplet_strategy == "all":
+                loss = self._batch_all_triplet_loss_exact(sampled_labels, sampled_embeddings)
+            else:  # semi_hard - use hard as fallback
+                loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+        else:
+            # Use standard pairwise matrix computation (faster but memory intensive)
+            if self.config.triplet_strategy == "hard":
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            elif self.config.triplet_strategy == "all":
+                loss = self._batch_all_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            else:  # semi_hard - use hard as fallback since semi_hard is complex
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+
         return loss
     
     def _resize_embeddings(self, embeddings: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
@@ -927,6 +1317,8 @@ def create_pixel_triplet_loss(
     triplet_strategy: str = "semi_hard",
     reduction: str = "mean",
     remove_easy_triplets: bool = False,
+    use_exact: bool = False,
+    batch_size_for_exact: int = 100,
     **kwargs
 ) -> PixelTripletLoss:
     """
@@ -944,7 +1336,11 @@ def create_pixel_triplet_loss(
         triplet_strategy: Triplet mining strategy ('semi_hard', 'hard', 'all')
         reduction: Loss reduction ('mean', 'sum', 'none')
         remove_easy_triplets: Whether to exclude easy triplets in batch_all mode
-        
+        use_exact: If True, use loop-based exact computation instead of full pairwise matrix.
+            This is memory efficient for large images but slower. Default is False.
+        batch_size_for_exact: Number of anchor pixels to process per iteration when use_exact=True.
+            Larger values are faster but use more memory. Default is 100.
+
     Returns:
         PixelTripletLoss instance
         
@@ -956,6 +1352,12 @@ def create_pixel_triplet_loss(
         Important: When using strict_per_class_balancing=True in graph mode,
         compile your model with jit_compile=False to avoid XLA compilation issues:
         model.compile(optimizer='adam', loss=pixel_loss, jit_compile=False)
+
+        For large images where memory is an issue, use use_exact=True:
+        loss = create_pixel_triplet_loss(
+            use_exact=True,
+            batch_size_for_exact=200  # Adjust based on available memory
+        )
     """
     config = PixelTripletConfig(
         margin=margin,
@@ -969,6 +1371,8 @@ def create_pixel_triplet_loss(
         triplet_strategy=triplet_strategy,
         reduction=reduction,
         remove_easy_triplets=remove_easy_triplets,
+        use_exact=use_exact,
+        batch_size_for_exact=batch_size_for_exact,
         **kwargs
     )
     return PixelTripletLoss(config=config)
