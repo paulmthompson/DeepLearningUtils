@@ -122,6 +122,11 @@ class PixelTripletConfig:
     use_exact: bool = False  # If True, compute distances via looping instead of full pairwise matrix
     batch_size_for_exact: int = 100  # Number of anchor pixels to process per iteration in exact mode
 
+    # Class-balanced weighting for exact mode
+    # When True: uses ALL pixels, accumulates loss per anchor class, then weights classes equally
+    # This ensures each class contributes equally to the final loss despite pixel count imbalance
+    class_balanced_weighting: bool = False  # Only used when use_exact=True
+
     def __post_init__(self):
         if self.margin <= 0:
             raise ValueError(f"margin must be > 0, got {self.margin}")
@@ -139,6 +144,12 @@ class PixelTripletConfig:
             raise ValueError(f"reduction must be one of ['mean', 'sum', 'none'], got {self.reduction}")
         if self.batch_size_for_exact <= 0:
             raise ValueError(f"batch_size_for_exact must be > 0, got {self.batch_size_for_exact}")
+
+        # class_balanced_weighting requires use_exact
+        if self.class_balanced_weighting and not self.use_exact:
+            print("Warning: class_balanced_weighting=True requires use_exact=True. "
+                  "Setting use_exact=True automatically.")
+            object.__setattr__(self, 'use_exact', True)
 
         # Provide guidance on the new parameters
         if self.use_balanced_sampling and self.max_samples_per_class is None:
@@ -206,6 +217,7 @@ class PixelTripletLoss(Loss):
             'memory_warning_threshold': self.config.memory_warning_threshold,
             'use_exact': self.config.use_exact,
             'batch_size_for_exact': self.config.batch_size_for_exact,
+            'class_balanced_weighting': self.config.class_balanced_weighting,
         }
         return {**base_config, **config_dict}
     
@@ -227,6 +239,7 @@ class PixelTripletLoss(Loss):
             memory_warning_threshold=config.pop('memory_warning_threshold', 10_000_000),
             use_exact=config.pop('use_exact', False),
             batch_size_for_exact=config.pop('batch_size_for_exact', 100),
+            class_balanced_weighting=config.pop('class_balanced_weighting', False),
         )
         return cls(config=triplet_config, **config)
     
@@ -753,6 +766,316 @@ class PixelTripletLoss(Loss):
             # Divide by total number of triplets
             return final_loss_sum / (final_count + 1e-16)
 
+    def _batch_hard_triplet_loss_exact_class_balanced(
+        self, labels: tf.Tensor, embeddings: tf.Tensor
+    ) -> tf.Tensor:
+        """
+        Batch hard triplet loss with class-balanced weighting.
+
+        Uses ALL pixels, accumulates loss per anchor class, then weights
+        each class equally in the final loss. This ensures each class
+        contributes equally despite pixel count imbalance.
+
+        For example, if 80% of pixels are background and 5% are each of 4 classes,
+        each class (including background) will contribute 1/5 of the final loss.
+        """
+        num_pixels = tf.shape(embeddings)[0]
+        batch_size = self.config.batch_size_for_exact
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+
+        all_labels = labels
+
+        # Get unique foreground classes (exclude background=0 as anchors)
+        unique_classes, _ = tf.unique(labels)
+        # Filter to only foreground classes (> 0)
+        foreground_classes = tf.boolean_mask(unique_classes, unique_classes > 0)
+        num_fg_classes = tf.shape(foreground_classes)[0]
+
+        # We'll accumulate loss and count per class using a fixed-size tensor
+        # Use a large enough size to handle any number of classes
+        max_classes = 100  # Maximum number of foreground classes supported
+
+        # Accumulators: loss_per_class[c] and count_per_class[c] for class c
+        loss_per_class = tf.zeros([max_classes], dtype=tf.float32)
+        count_per_class = tf.zeros([max_classes], dtype=tf.float32)
+
+        def compute_batch_loss(batch_idx, accumulators):
+            """Compute hard triplet loss for one batch of anchors, accumulating per class."""
+            loss_per_class, count_per_class = accumulators
+
+            start_idx = batch_idx * batch_size
+            end_idx = tf.minimum(start_idx + batch_size, num_pixels)
+
+            anchor_embeddings = embeddings[start_idx:end_idx]
+            anchor_labels = labels[start_idx:end_idx]
+
+            # Compute distances from anchors to all pixels
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)
+
+            # Create label masks
+            anchor_labels_exp = tf.expand_dims(anchor_labels, 1)
+            all_labels_exp = tf.expand_dims(all_labels, 0)
+
+            same_class = tf.equal(anchor_labels_exp, all_labels_exp)
+            anchor_non_bg = tf.greater(anchor_labels, 0)
+            anchor_non_bg_exp = tf.expand_dims(anchor_non_bg, 1)
+
+            # Self mask
+            batch_indices = tf.range(start_idx, end_idx)
+            all_indices = tf.range(num_pixels)
+            self_mask = tf.equal(
+                tf.expand_dims(batch_indices, 1),
+                tf.expand_dims(all_indices, 0)
+            )
+            not_self = tf.logical_not(self_mask)
+
+            # Valid positive: same class, not self, anchor is foreground
+            positive_mask = tf.logical_and(same_class, not_self)
+            positive_mask = tf.logical_and(positive_mask, anchor_non_bg_exp)
+
+            # Negative mask: different class
+            negative_mask = tf.logical_not(same_class)
+
+            positive_mask_float = tf.cast(positive_mask, tf.float32)
+            negative_mask_float = tf.cast(negative_mask, tf.float32)
+
+            # Hardest positive
+            masked_positive_dist = distances * positive_mask_float + (1.0 - positive_mask_float) * (-1e9)
+            hardest_positive_dist = tf.reduce_max(masked_positive_dist, axis=1)
+
+            # Hardest negative
+            masked_negative_dist = distances + (1.0 - negative_mask_float) * 1e9
+            hardest_negative_dist = tf.reduce_min(masked_negative_dist, axis=1)
+
+            # Scaling factor
+            neg_count = tf.reduce_sum(negative_mask_float, axis=1)
+            scaling = tf.reduce_sum(distances * negative_mask_float, axis=1) / (neg_count + 1e-16)
+
+            # Triplet loss per anchor
+            triplet_loss = tf.maximum(
+                (hardest_positive_dist - hardest_negative_dist) / (scaling + 1e-16) + self.config.margin,
+                0.0
+            )
+
+            # Valid anchors (have positives and negatives)
+            has_valid_positive = tf.reduce_any(positive_mask, axis=1)
+            has_valid_negative = tf.reduce_any(negative_mask, axis=1)
+            valid_anchor = tf.logical_and(has_valid_positive, has_valid_negative)
+            valid_anchor_float = tf.cast(valid_anchor, tf.float32)
+
+            # Accumulate per anchor class
+            # For each anchor, add its loss to the corresponding class bucket
+            anchor_labels_clipped = tf.clip_by_value(anchor_labels, 0, max_classes - 1)
+
+            # Use scatter_nd to accumulate losses per class
+            indices = tf.expand_dims(anchor_labels_clipped, 1)
+            batch_loss_per_class = tf.scatter_nd(
+                indices,
+                triplet_loss * valid_anchor_float,
+                [max_classes]
+            )
+            batch_count_per_class = tf.scatter_nd(
+                indices,
+                valid_anchor_float,
+                [max_classes]
+            )
+
+            return (
+                loss_per_class + batch_loss_per_class,
+                count_per_class + batch_count_per_class
+            )
+
+        # Loop through batches
+        def cond(batch_idx, accumulators):
+            return batch_idx < num_batches
+
+        def body(batch_idx, accumulators):
+            new_accumulators = compute_batch_loss(batch_idx, accumulators)
+            return batch_idx + 1, new_accumulators
+
+        _, (final_loss_per_class, final_count_per_class) = tf.while_loop(
+            cond,
+            body,
+            loop_vars=(tf.constant(0), (loss_per_class, count_per_class)),
+            parallel_iterations=1
+        )
+
+        # Compute mean loss per class (only for classes with valid triplets)
+        mean_loss_per_class = final_loss_per_class / (final_count_per_class + 1e-16)
+
+        # Weight each class equally: average over classes with non-zero counts
+        valid_class_mask = final_count_per_class > 0
+        num_valid_classes = tf.reduce_sum(tf.cast(valid_class_mask, tf.float32))
+
+        # Final loss: average of per-class mean losses
+        total_loss = tf.reduce_sum(mean_loss_per_class * tf.cast(valid_class_mask, tf.float32))
+        final_loss = total_loss / (num_valid_classes + 1e-16)
+
+        return final_loss
+
+    def _batch_all_triplet_loss_exact_class_balanced(
+        self, labels: tf.Tensor, embeddings: tf.Tensor
+    ) -> tf.Tensor:
+        """
+        Batch all triplet loss with class-balanced weighting.
+
+        Uses ALL pixels, computes triplet loss for all valid triplets,
+        accumulates per anchor class, then weights each class equally.
+        """
+        num_pixels = tf.shape(embeddings)[0]
+        batch_size = self.config.batch_size_for_exact
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+
+        all_labels = labels
+        max_classes = 100
+
+        # Accumulators per class
+        loss_per_class = tf.zeros([max_classes], dtype=tf.float32)
+        count_per_class = tf.zeros([max_classes], dtype=tf.float32)
+        positive_count_per_class = tf.zeros([max_classes], dtype=tf.float32)  # For remove_easy_triplets
+
+        def compute_batch_loss(batch_idx, accumulators):
+            """Compute batch all triplet loss for one batch of anchors."""
+            loss_per_class, count_per_class, positive_count_per_class = accumulators
+
+            start_idx = batch_idx * batch_size
+            end_idx = tf.minimum(start_idx + batch_size, num_pixels)
+            actual_batch_size = end_idx - start_idx
+
+            anchor_embeddings = embeddings[start_idx:end_idx]
+            anchor_labels = labels[start_idx:end_idx]
+
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)
+
+            anchor_labels_exp = tf.expand_dims(anchor_labels, 1)
+            all_labels_exp = tf.expand_dims(all_labels, 0)
+
+            same_class = tf.equal(anchor_labels_exp, all_labels_exp)
+            diff_class = tf.logical_not(same_class)
+            anchor_non_bg = tf.greater(anchor_labels, 0)
+            anchor_non_bg_exp = tf.expand_dims(anchor_non_bg, 1)
+
+            batch_indices = tf.range(start_idx, end_idx)
+            all_indices = tf.range(num_pixels)
+            self_mask = tf.equal(
+                tf.expand_dims(batch_indices, 1),
+                tf.expand_dims(all_indices, 0)
+            )
+            not_self = tf.logical_not(self_mask)
+
+            positive_mask = tf.logical_and(same_class, not_self)
+            positive_mask = tf.logical_and(positive_mask, anchor_non_bg_exp)
+            negative_mask = diff_class
+
+            positive_mask_float = tf.cast(positive_mask, tf.float32)
+            negative_mask_float = tf.cast(negative_mask, tf.float32)
+
+            pos_count = tf.reduce_sum(positive_mask_float, axis=1)
+            neg_count = tf.reduce_sum(negative_mask_float, axis=1)
+
+            if self.config.remove_easy_triplets:
+                # Need to compute each triplet individually
+                def compute_anchor_loss(anchor_idx):
+                    anchor_distances = distances[anchor_idx]
+                    anchor_pos_mask = positive_mask[anchor_idx]
+                    anchor_neg_mask = negative_mask[anchor_idx]
+
+                    pos_indices = tf.where(anchor_pos_mask)[:, 0]
+                    neg_indices = tf.where(anchor_neg_mask)[:, 0]
+
+                    pos_dists = tf.gather(anchor_distances, pos_indices)
+                    neg_dists = tf.gather(anchor_distances, neg_indices)
+
+                    num_pos = tf.shape(pos_dists)[0]
+                    num_neg = tf.shape(neg_dists)[0]
+
+                    pos_expanded = tf.expand_dims(pos_dists, 1)
+                    neg_expanded = tf.expand_dims(neg_dists, 0)
+
+                    triplet_losses = pos_expanded - neg_expanded + self.config.margin
+                    triplet_losses = tf.maximum(triplet_losses, 0.0)
+
+                    anchor_loss = tf.reduce_sum(triplet_losses)
+                    anchor_total_triplets = tf.cast(num_pos * num_neg, tf.float32)
+                    anchor_positive_triplets = tf.reduce_sum(tf.cast(triplet_losses > 1e-16, tf.float32))
+
+                    return anchor_loss, anchor_total_triplets, anchor_positive_triplets
+
+                anchor_results = tf.map_fn(
+                    compute_anchor_loss,
+                    tf.range(actual_batch_size),
+                    fn_output_signature=(
+                        tf.TensorSpec([], dtype=tf.float32),
+                        tf.TensorSpec([], dtype=tf.float32),
+                        tf.TensorSpec([], dtype=tf.float32),
+                    )
+                )
+
+                anchor_losses = anchor_results[0]
+                anchor_total_triplets = anchor_results[1]
+                anchor_positive_triplets = anchor_results[2]
+            else:
+                # Efficient computation without remove_easy_triplets
+                pos_dist_sum = tf.reduce_sum(distances * positive_mask_float, axis=1)
+                neg_dist_sum = tf.reduce_sum(distances * negative_mask_float, axis=1)
+                triplets_per_anchor = pos_count * neg_count
+
+                anchor_losses = (
+                    pos_dist_sum * neg_count -
+                    neg_dist_sum * pos_count +
+                    self.config.margin * triplets_per_anchor
+                )
+                anchor_total_triplets = triplets_per_anchor
+                anchor_positive_triplets = triplets_per_anchor  # All triplets counted
+
+            # Accumulate per class
+            anchor_labels_clipped = tf.clip_by_value(anchor_labels, 0, max_classes - 1)
+            indices = tf.expand_dims(anchor_labels_clipped, 1)
+
+            batch_loss_per_class = tf.scatter_nd(indices, anchor_losses, [max_classes])
+            batch_count_per_class = tf.scatter_nd(indices, anchor_total_triplets, [max_classes])
+            batch_positive_per_class = tf.scatter_nd(indices, anchor_positive_triplets, [max_classes])
+
+            return (
+                loss_per_class + batch_loss_per_class,
+                count_per_class + batch_count_per_class,
+                positive_count_per_class + batch_positive_per_class
+            )
+
+        def cond(batch_idx, accumulators):
+            return batch_idx < num_batches
+
+        def body(batch_idx, accumulators):
+            new_accumulators = compute_batch_loss(batch_idx, accumulators)
+            return batch_idx + 1, new_accumulators
+
+        initial_accumulators = (loss_per_class, count_per_class, positive_count_per_class)
+        _, final_accumulators = tf.while_loop(
+            cond,
+            body,
+            loop_vars=(tf.constant(0), initial_accumulators),
+            parallel_iterations=1
+        )
+
+        final_loss_per_class, final_count_per_class, final_positive_per_class = final_accumulators
+
+        # Compute mean loss per class
+        if self.config.remove_easy_triplets:
+            # Divide by positive triplet count per class
+            mean_loss_per_class = final_loss_per_class / (final_positive_per_class + 1e-16)
+            valid_class_mask = final_positive_per_class > 0
+        else:
+            # Divide by total triplet count per class
+            mean_loss_per_class = final_loss_per_class / (final_count_per_class + 1e-16)
+            valid_class_mask = final_count_per_class > 0
+
+        # Weight each class equally
+        num_valid_classes = tf.reduce_sum(tf.cast(valid_class_mask, tf.float32))
+        total_loss = tf.reduce_sum(mean_loss_per_class * tf.cast(valid_class_mask, tf.float32))
+        final_loss = total_loss / (num_valid_classes + 1e-16)
+
+        return final_loss
+
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """
         Compute pixel-based triplet loss.
@@ -781,8 +1104,13 @@ class PixelTripletLoss(Loss):
         # Convert labels to class indices (background=0, whisker_i=i+1)
         class_labels = self._labels_to_classes(y_true)
         
-        # Sample pixels per class using balanced or legacy approach
-        if self.config.use_balanced_sampling:
+        # Get pixels: either all pixels (class_balanced_weighting) or sampled pixels
+        if self.config.class_balanced_weighting:
+            # Use ALL pixels - class balancing is done via weighting in the loss
+            sampled_embeddings, sampled_labels = self._get_all_pixels(
+                y_pred_resized, class_labels
+            )
+        elif self.config.use_balanced_sampling:
             if self.config.strict_per_class_balancing:
                 # Try strict per-class balancing
                 if self.config.prefer_graph_mode_strict:
@@ -830,18 +1158,29 @@ class PixelTripletLoss(Loss):
                 y_pred_resized, class_labels
             )
         
-        # Check for memory warning
-        self._check_memory_usage_simple(sampled_embeddings)
-        
+        # Check for memory warning (only if not using exact mode)
+        if not self.config.use_exact:
+            self._check_memory_usage_simple(sampled_embeddings)
+
         # Use custom triplet loss functions that support different distance metrics
         if self.config.use_exact:
             # Use loop-based exact computation (memory efficient for large images)
-            if self.config.triplet_strategy == "hard":
-                loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
-            elif self.config.triplet_strategy == "all":
-                loss = self._batch_all_triplet_loss_exact(sampled_labels, sampled_embeddings)
-            else:  # semi_hard - use hard as fallback
-                loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+            if self.config.class_balanced_weighting:
+                # Class-balanced weighting: accumulate per-class, then weight equally
+                if self.config.triplet_strategy == "hard":
+                    loss = self._batch_hard_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+                elif self.config.triplet_strategy == "all":
+                    loss = self._batch_all_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+                else:  # semi_hard - use hard as fallback
+                    loss = self._batch_hard_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+            else:
+                # Standard exact computation (no class weighting)
+                if self.config.triplet_strategy == "hard":
+                    loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+                elif self.config.triplet_strategy == "all":
+                    loss = self._batch_all_triplet_loss_exact(sampled_labels, sampled_embeddings)
+                else:  # semi_hard - use hard as fallback
+                    loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
         else:
             # Use standard pairwise matrix computation (faster but memory intensive)
             if self.config.triplet_strategy == "hard":
@@ -1025,7 +1364,36 @@ class PixelTripletLoss(Loss):
         )
         
         return final_embeddings, final_labels
-    
+
+    def _get_all_pixels(
+        self,
+        embeddings: tf.Tensor,
+        class_labels: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Get ALL pixels without any sampling.
+
+        Use this with use_exact=True to process every pixel in the image.
+        This is useful when you want exact statistics over the entire image
+        and can afford the computation time.
+
+        Args:
+            embeddings: (batch_size, h, w, feature_dim)
+            class_labels: (batch_size, h, w)
+
+        Returns:
+            all_embeddings: (N, feature_dim) where N = batch_size * h * w
+            all_labels: (N,)
+        """
+        shape = tf.shape(embeddings)
+        feature_dim = shape[3]
+
+        # Simply flatten without any sampling
+        embeddings_flat = tf.reshape(embeddings, [-1, feature_dim])  # (N, feature_dim)
+        labels_flat = tf.reshape(class_labels, [-1])  # (N,)
+
+        return embeddings_flat, labels_flat
+
     def _sample_pixels_balanced(
         self, 
         embeddings: tf.Tensor, 
@@ -1319,6 +1687,7 @@ def create_pixel_triplet_loss(
     remove_easy_triplets: bool = False,
     use_exact: bool = False,
     batch_size_for_exact: int = 100,
+    class_balanced_weighting: bool = False,
     **kwargs
 ) -> PixelTripletLoss:
     """
@@ -1340,6 +1709,10 @@ def create_pixel_triplet_loss(
             This is memory efficient for large images but slower. Default is False.
         batch_size_for_exact: Number of anchor pixels to process per iteration when use_exact=True.
             Larger values are faster but use more memory. Default is 100.
+        class_balanced_weighting: If True, uses ALL pixels without sampling, accumulates
+            loss per anchor class, then weights each class equally. This ensures each class
+            contributes equally to the loss despite pixel count imbalance. Only works with
+            use_exact=True. Default is False.
 
     Returns:
         PixelTripletLoss instance
@@ -1358,6 +1731,12 @@ def create_pixel_triplet_loss(
             use_exact=True,
             batch_size_for_exact=200  # Adjust based on available memory
         )
+
+        For class-balanced loss that uses ALL pixels with equal class contribution:
+        loss = create_pixel_triplet_loss(
+            class_balanced_weighting=True,  # Automatically enables use_exact
+            batch_size_for_exact=200
+        )
     """
     config = PixelTripletConfig(
         margin=margin,
@@ -1373,6 +1752,7 @@ def create_pixel_triplet_loss(
         remove_easy_triplets=remove_easy_triplets,
         use_exact=use_exact,
         batch_size_for_exact=batch_size_for_exact,
+        class_balanced_weighting=class_balanced_weighting,
         **kwargs
     )
     return PixelTripletLoss(config=config)

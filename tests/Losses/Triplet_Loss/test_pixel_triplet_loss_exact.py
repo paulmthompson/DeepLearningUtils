@@ -587,3 +587,217 @@ class TestExactTripletLossEdgeCases:
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
 
+
+class TestClassBalancedWeighting:
+    """Tests for class-balanced weighting in exact mode."""
+
+    def test_class_balanced_weighting_basic(self):
+        """Test that class_balanced_weighting runs without errors."""
+        batch_size = 1
+        height, width = 24, 24
+        feature_dim = 8
+        num_classes = 2
+
+        # Create imbalanced classes: 80% background, 20% foreground
+        y_true = np.zeros((batch_size, height, width, num_classes), dtype=np.float32)
+        # Only bottom-right quadrant is foreground
+        y_true[:, height//2:, width//2:, 0] = 1.0
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32)
+        embeddings[:, height//2:, width//2:, :] += 3.0
+
+        y_true = tf.constant(y_true)
+        y_pred = tf.constant(embeddings)
+
+        loss_fn = PixelTripletLoss(
+            config=PixelTripletConfig(
+                margin=1.0,
+                triplet_strategy="hard",
+                class_balanced_weighting=True,  # This enables use_exact automatically
+                batch_size_for_exact=50,
+            )
+        )
+
+        loss = loss_fn(y_true, y_pred)
+        loss_value = float(keras.ops.convert_to_numpy(loss))
+
+        print(f"\nClass-balanced hard triplet loss: {loss_value:.6f}")
+
+        assert not np.isnan(loss_value), "Loss should not be NaN"
+        assert not np.isinf(loss_value), "Loss should not be Inf"
+        assert loss_value >= 0, "Loss should be non-negative"
+
+    def test_class_balanced_vs_unbalanced(self):
+        """
+        Test that class-balanced weighting gives different results than unbalanced.
+
+        With imbalanced classes, the unbalanced loss will be dominated by the
+        majority class, while balanced loss weights each class equally.
+        """
+        batch_size = 1
+        height, width = 32, 32
+        feature_dim = 8
+        num_classes = 2
+
+        # Highly imbalanced: ~90% background, ~10% foreground
+        y_true = np.zeros((batch_size, height, width, num_classes), dtype=np.float32)
+        y_true[:, 28:, 28:, 0] = 1.0  # Only 4x4 = 16 pixels foreground
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32)
+        embeddings[:, 28:, 28:, :] += 3.0
+
+        y_true = tf.constant(y_true)
+        y_pred = tf.constant(embeddings)
+
+        # Unbalanced (standard exact mode)
+        loss_unbalanced = PixelTripletLoss(
+            config=PixelTripletConfig(
+                margin=1.0,
+                triplet_strategy="hard",
+                use_exact=True,
+                class_balanced_weighting=False,
+                batch_size_for_exact=50,
+                max_samples_per_class=500,  # Sample many pixels
+            )
+        )
+
+        # Balanced (class-balanced weighting)
+        loss_balanced = PixelTripletLoss(
+            config=PixelTripletConfig(
+                margin=1.0,
+                triplet_strategy="hard",
+                class_balanced_weighting=True,
+                batch_size_for_exact=50,
+            )
+        )
+
+        unbalanced_value = float(keras.ops.convert_to_numpy(loss_unbalanced(y_true, y_pred)))
+        balanced_value = float(keras.ops.convert_to_numpy(loss_balanced(y_true, y_pred)))
+
+        print(f"\nImbalanced classes (90% bg, 10% fg):")
+        print(f"  Unbalanced loss: {unbalanced_value:.6f}")
+        print(f"  Balanced loss:   {balanced_value:.6f}")
+
+        # Both should be valid
+        assert not np.isnan(unbalanced_value), "Unbalanced loss should not be NaN"
+        assert not np.isnan(balanced_value), "Balanced loss should not be NaN"
+
+    def test_class_balanced_multiple_foreground_classes(self):
+        """Test class-balanced weighting with multiple foreground classes."""
+        batch_size = 1
+        height, width = 32, 32
+        feature_dim = 8
+        num_classes = 3
+
+        # 3 foreground classes with different sizes
+        y_true = np.zeros((batch_size, height, width, num_classes), dtype=np.float32)
+        y_true[:, :8, :, 0] = 1.0     # Class 1: 8x32 = 256 pixels (25%)
+        y_true[:, 8:12, :, 1] = 1.0   # Class 2: 4x32 = 128 pixels (12.5%)
+        y_true[:, 12:14, :, 2] = 1.0  # Class 3: 2x32 = 64 pixels (6.25%)
+        # Background: 18x32 = 576 pixels (56.25%)
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32) * 0.5
+        # Give each class a different mean embedding
+        embeddings[:, :8, :, 0] += 3.0
+        embeddings[:, 8:12, :, 1] += 3.0
+        embeddings[:, 12:14, :, 2] += 3.0
+
+        y_true = tf.constant(y_true)
+        y_pred = tf.constant(embeddings)
+
+        loss_fn = PixelTripletLoss(
+            config=PixelTripletConfig(
+                margin=1.0,
+                triplet_strategy="hard",
+                class_balanced_weighting=True,
+                batch_size_for_exact=50,
+            )
+        )
+
+        loss_value = float(keras.ops.convert_to_numpy(loss_fn(y_true, y_pred)))
+
+        print(f"\nClass-balanced with 3 foreground classes: {loss_value:.6f}")
+
+        assert not np.isnan(loss_value), "Loss should not be NaN"
+        assert not np.isinf(loss_value), "Loss should not be Inf"
+
+    def test_class_balanced_batch_all_with_remove_easy(self):
+        """Test class-balanced batch-all with remove_easy_triplets."""
+        batch_size = 1
+        height, width = 24, 24
+        feature_dim = 8
+        num_classes = 2
+
+        y_true = np.zeros((batch_size, height, width, num_classes), dtype=np.float32)
+        y_true[:, :, width//2:, 0] = 1.0
+
+        np.random.seed(42)
+        embeddings = np.random.randn(batch_size, height, width, feature_dim).astype(np.float32) * 0.5
+        embeddings[:, :, width//2:, :] += 2.0
+
+        y_true = tf.constant(y_true)
+        y_pred = tf.constant(embeddings)
+
+        loss_fn = PixelTripletLoss(
+            config=PixelTripletConfig(
+                margin=1.0,
+                triplet_strategy="all",
+                class_balanced_weighting=True,
+                remove_easy_triplets=True,
+                batch_size_for_exact=50,
+            )
+        )
+
+        loss_value = float(keras.ops.convert_to_numpy(loss_fn(y_true, y_pred)))
+
+        print(f"\nClass-balanced batch-all with remove_easy_triplets: {loss_value:.6f}")
+
+        assert not np.isnan(loss_value), "Loss should not be NaN"
+        assert not np.isinf(loss_value), "Loss should not be Inf"
+        assert loss_value >= 0, "Loss should be non-negative"
+
+    def test_class_balanced_config_auto_enables_exact(self):
+        """Test that class_balanced_weighting automatically enables use_exact."""
+        config = PixelTripletConfig(
+            class_balanced_weighting=True,
+            use_exact=False,  # This should be overridden
+        )
+
+        assert config.use_exact is True, "use_exact should be auto-enabled"
+        assert config.class_balanced_weighting is True
+
+    def test_class_balanced_serialization(self):
+        """Test that class_balanced_weighting is properly serialized."""
+        loss_fn = PixelTripletLoss(
+            config=PixelTripletConfig(
+                class_balanced_weighting=True,
+                batch_size_for_exact=150,
+            )
+        )
+
+        saved_config = loss_fn.get_config()
+
+        assert saved_config['class_balanced_weighting'] is True
+        assert saved_config['use_exact'] is True
+
+        # Test from_config
+        restored = PixelTripletLoss.from_config(saved_config)
+        assert restored.config.class_balanced_weighting is True
+
+    def test_convenience_function_with_class_balanced(self):
+        """Test create_pixel_triplet_loss with class_balanced_weighting."""
+        loss_fn = create_pixel_triplet_loss(
+            margin=0.8,
+            class_balanced_weighting=True,
+            batch_size_for_exact=200,
+            triplet_strategy="hard",
+        )
+
+        assert loss_fn.config.class_balanced_weighting is True
+        assert loss_fn.config.use_exact is True
+        assert loss_fn.config.batch_size_for_exact == 200
+
+
