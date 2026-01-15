@@ -183,6 +183,8 @@ class MemoryEncoderLayer(keras.layers.Layer):
         self.channels = channels
         self.combine_operation = combine_operation
         self.activation = activation
+        self.base_memory_model_output_layer = base_memory_model_output_layer
+        self.mask_encoder_output_layer = mask_encoder_output_layer
 
         # Check combine operation
         if combine_operation not in ['add', 'dense', 'conv']:
@@ -295,6 +297,34 @@ class MemoryEncoderLayer(keras.layers.Layer):
                         base_model_output[3])
         return output_shape
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "base_memory_model": keras.saving.serialize_keras_object(self.base_memory_model),
+            "mask_encoder_model": keras.saving.serialize_keras_object(self.mask_encoder_model),
+            "height": self.height,
+            "width": self.width,
+            "channels": self.channels,
+            "base_memory_model_output_layer": self.base_memory_model_output_layer,
+            "mask_encoder_output_layer": self.mask_encoder_output_layer,
+            "combine_operation": self.combine_operation,
+            "activation": keras.saving.serialize_keras_object(self.activation),
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        config["base_memory_model"] = keras.saving.deserialize_keras_object(
+            config["base_memory_model"]
+        )
+        config["mask_encoder_model"] = keras.saving.deserialize_keras_object(
+            config["mask_encoder_model"]
+        )
+        config["activation"] = keras.saving.deserialize_keras_object(
+            config["activation"]
+        )
+        return cls(**config)
+
 
 class MemoryModelBase(keras.layers.Layer):
     """
@@ -312,6 +342,10 @@ class MemoryModelBase(keras.layers.Layer):
                  **kwargs):
         super().__init__(**kwargs)
 
+        self.base_model = base_model
+        self._input_shape = input_shape
+        self.output_layer_name = output_layer_name
+
         if output_layer_name is not None:
             outputs = base_model.get_layer(output_layer_name).output
         else:
@@ -325,3 +359,19 @@ class MemoryModelBase(keras.layers.Layer):
     def compute_output_shape(self, input_shape):
         # Assuming the input shape is (batch_size, sequence_length, H, W, C)
         return (input_shape[0], self.model.output_shape[1], self.model.output_shape[2], self.model.output_shape[3])
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "base_model": keras.saving.serialize_keras_object(self.base_model),
+            "input_shape": self._input_shape,
+            "output_layer_name": self.output_layer_name,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        config["base_model"] = keras.saving.deserialize_keras_object(
+            config["base_model"]
+        )
+        return cls(**config)
