@@ -18,7 +18,6 @@ from typing import Tuple, Union, Any, Optional
 import keras
 import math
 import numpy as np
-import tensorflow as tf
 
 from .rotary_config import RotaryPositionalEncodingConfig
 
@@ -237,23 +236,25 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
         # Reshape q to separate real/imaginary pairs for rotation
         q_reshaped = keras.ops.reshape(q, (batch_size, seq_len, hw, dim // 2, 2))
         
-        # Create complex representation  
-        q_complex = tf.complex(q_reshaped[..., 0], q_reshaped[..., 1])
-        
-        # Convert frequencies to complex exponentials
-        # freqs_combined has shape (hw, dim) where each value is a frequency
-        # For rotary embeddings, consecutive pairs of features are rotated by the same frequency
-        freqs_for_complex = freqs_combined[:, ::2]  # Take every other frequency: (hw, dim//2)
-        freqs_complex = tf.complex(freqs_for_complex, keras.ops.zeros_like(freqs_for_complex))
-        rotation_matrix = keras.ops.exp(1.0j * freqs_complex)
-        
-        # Apply rotation
-        q_rotated = q_complex * rotation_matrix[None, None, :, :]
-        
         # Extract real and imaginary parts
-        q_rotated_real = keras.ops.real(q_rotated)
-        q_rotated_imag = keras.ops.imag(q_rotated)
-        
+        q_real = q_reshaped[..., 0]  # (batch_size, seq_len, hw, dim//2)
+        q_imag = q_reshaped[..., 1]  # (batch_size, seq_len, hw, dim//2)
+
+        # For rotary embeddings, consecutive pairs of features are rotated by the same frequency
+        freqs_for_rotation = freqs_combined[:, ::2]  # Take every other frequency: (hw, dim//2)
+
+        # Compute cos and sin for rotation
+        cos_freqs = keras.ops.cos(freqs_for_rotation)  # (hw, dim//2)
+        sin_freqs = keras.ops.sin(freqs_for_rotation)  # (hw, dim//2)
+
+        # Apply rotation: (real, imag) -> (real*cos - imag*sin, real*sin + imag*cos)
+        # Broadcast cos and sin to match q's shape
+        cos_freqs = keras.ops.expand_dims(keras.ops.expand_dims(cos_freqs, 0), 0)  # (1, 1, hw, dim//2)
+        sin_freqs = keras.ops.expand_dims(keras.ops.expand_dims(sin_freqs, 0), 0)  # (1, 1, hw, dim//2)
+
+        q_rotated_real = q_real * cos_freqs - q_imag * sin_freqs
+        q_rotated_imag = q_real * sin_freqs + q_imag * cos_freqs
+
         # Recombine into original format
         q_rotated = keras.ops.stack([q_rotated_real, q_rotated_imag], axis=-1)
         q_rotated = keras.ops.reshape(q_rotated, (batch_size, seq_len, hw, dim))
@@ -347,3 +348,22 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
             'max_freq': self.config.max_freq,
         })
         return config
+
+    def compute_output_spec(self, input_spec: keras.KerasTensor) -> keras.KerasTensor:
+        """
+        Compute output spec for shape inference during model loading.
+
+        This method is called during model deserialization to infer output shapes
+        without actually executing the layer. This prevents issues with CUDA tensors
+        during model loading.
+
+        Args:
+            input_spec: Input tensor specification.
+
+        Returns:
+            Output tensor specification (same shape and dtype as input).
+        """
+        return keras.KerasTensor(
+            shape=input_spec.shape,
+            dtype=input_spec.dtype
+        )
