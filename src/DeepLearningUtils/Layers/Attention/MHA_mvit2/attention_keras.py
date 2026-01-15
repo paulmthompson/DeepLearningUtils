@@ -141,6 +141,20 @@ class DotProductAttention(keras.layers.Layer):
         else:
             return self.softmax_attention(query, key, value, mask=mask)
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "query_shape": (self.query_seq_len, self.query_height, self.query_width),
+            "key_shape": (self.key_seq_len, self.key_height, self.key_width),
+            "use_scale": self.use_scale,
+            "drop_rate": self.drop_rate,
+            "use_positional_embedding": self.use_positional_embedding,
+            "use_key_positional_embedding": self.use_key_positional_embedding,
+            "use_linear_attention": self.use_linear_attention,
+            "heads": self.heads,
+        })
+        return config
+
 
 class MultiHeadAttention(keras.layers.Layer):
     def __init__(self,
@@ -317,3 +331,22 @@ class MultiHeadAttention(keras.layers.Layer):
         out = self.output_dropout(out)
 
         return out
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "query_shape": (self.query_seq_len, self.query_height, self.query_width),
+            "key_shape": (self.key_seq_len, self.key_height, self.key_width),
+            "h": self.h,
+            "value_dim": self.value_dim,
+            "key_dim": self.key_dim,
+            "attention_drop_rate": self.attention_drop_rate,
+            "use_positional_embedding": self.use_positional_embedding,
+            "use_key_positional_embedding": self.use_key_positional_embedding,
+            "use_linear_attention": self.use_linear_attention,
+            "output_activation": self.output_activation,
+            "query_embedding": self.query_embedding,
+            "key_embedding": self.key_embedding,
+            "value_embedding": self.value_embedding,
+        })
+        return config
