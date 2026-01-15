@@ -155,11 +155,11 @@ class RelativePositionalEmbedding2D(keras.layers.Layer):
              self.config.key_seq_len * self.config.key_height * self.config.key_width)
         )
         
-        # Precompute distance matrices for efficiency
+        # Precompute distance matrices for efficiency (store as numpy, convert in call)
         height_dist, width_dist, time_dist = calculate_all_distances(self.config)
-        self.height_distances = keras.ops.convert_to_tensor(height_dist, dtype="int32")
-        self.width_distances = keras.ops.convert_to_tensor(width_dist, dtype="int32")
-        self.time_distances = keras.ops.convert_to_tensor(time_dist, dtype="int32")
+        self._height_distances_np = height_dist
+        self._width_distances_np = width_dist
+        self._time_distances_np = time_dist
     
     def build(self, input_shape: List[Tuple[int, ...]]) -> None:
         """
@@ -223,10 +223,15 @@ class RelativePositionalEmbedding2D(keras.layers.Layer):
 
         query, scores = inputs
 
+        # Convert precomputed distance matrices to tensors
+        height_distances = keras.ops.convert_to_tensor(self._height_distances_np, dtype="int32")
+        width_distances = keras.ops.convert_to_tensor(self._width_distances_np, dtype="int32")
+        time_distances = keras.ops.convert_to_tensor(self._time_distances_np, dtype="int32")
+
         # Get embedding vectors using precomputed distances
-        Rh = keras.ops.take(self.height_embeddings, self.height_distances, axis=0)
-        Rw = keras.ops.take(self.width_embeddings, self.width_distances, axis=0)
-        Rt = keras.ops.take(self.time_embeddings, self.time_distances, axis=0)
+        Rh = keras.ops.take(self.height_embeddings, height_distances, axis=0)
+        Rw = keras.ops.take(self.width_embeddings, width_distances, axis=0)
+        Rt = keras.ops.take(self.time_embeddings, time_distances, axis=0)
         
         # Apply dropout
         Rh = self.height_dropout(Rh)
@@ -393,11 +398,11 @@ class RelativePositionalEmbedding2DKey(keras.layers.Layer):
              self.config.key_seq_len * self.config.key_height * self.config.key_width)
         )
         
-        # Precompute distance matrices for key-based calculation
+        # Precompute distance matrices for key-based calculation (store as numpy, convert in call)
         height_dist, width_dist, time_dist = calculate_key_distances(self.config)
-        self.height_distances = keras.ops.convert_to_tensor(height_dist, dtype="int32")
-        self.width_distances = keras.ops.convert_to_tensor(width_dist, dtype="int32")
-        self.time_distances = keras.ops.convert_to_tensor(time_dist, dtype="int32")
+        self._height_distances_np = height_dist
+        self._width_distances_np = width_dist
+        self._time_distances_np = time_dist
     
     def build(self, input_shape: List[Tuple[int, ...]]) -> None:
         """
@@ -461,10 +466,15 @@ class RelativePositionalEmbedding2DKey(keras.layers.Layer):
         
         key, scores = inputs
         
+        # Convert precomputed distance matrices to tensors
+        height_distances = keras.ops.convert_to_tensor(self._height_distances_np, dtype="int32")
+        width_distances = keras.ops.convert_to_tensor(self._width_distances_np, dtype="int32")
+        time_distances = keras.ops.convert_to_tensor(self._time_distances_np, dtype="int32")
+        
         # Get embedding vectors using precomputed distances
-        Rh = keras.ops.take(self.height_embeddings, self.height_distances, axis=0)
-        Rw = keras.ops.take(self.width_embeddings, self.width_distances, axis=0)
-        Rt = keras.ops.take(self.time_embeddings, self.time_distances, axis=0)
+        Rh = keras.ops.take(self.height_embeddings, height_distances, axis=0)
+        Rw = keras.ops.take(self.width_embeddings, width_distances, axis=0)
+        Rt = keras.ops.take(self.time_embeddings, time_distances, axis=0)
         
         # Apply dropout
         Rh = self.height_dropout(Rh)

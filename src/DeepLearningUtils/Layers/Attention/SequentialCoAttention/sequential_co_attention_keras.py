@@ -112,6 +112,20 @@ class CoAttentionModule(keras.layers.Layer):
 
         return att_out
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "memory_attention_module": keras.saving.serialize_keras_object(self.memory_attention_module),
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        config["memory_attention_module"] = keras.saving.deserialize_keras_object(
+            config["memory_attention_module"]
+        )
+        return cls(**config)
+
 
 class CoMemoryAttentionModule(keras.layers.Layer):
     def __init__(self,
@@ -212,6 +226,22 @@ class CoMemoryAttentionModule(keras.layers.Layer):
         att_out = self.output_reshape(att_out)
 
         return att_out
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "key_dim": self.key_dim,
+            "value_dim": self.value_dim,
+            "query_seq_len": self.query_seq_len,
+            "key_seq_len": self.key_seq_len,
+            "use_norm": self.use_norm,
+            "attention_drop_rate": self.attention_drop_rate,
+            "use_positional_embedding": self.use_positional_embedding,
+            "attention_heads": self.attention_heads,
+            "use_linear_attention": self.use_linear_attention,
+            "use_qkv_embedding": self.use_qkv_embedding,
+        })
+        return config
 
 
 def create_encoder_memory_mask(
