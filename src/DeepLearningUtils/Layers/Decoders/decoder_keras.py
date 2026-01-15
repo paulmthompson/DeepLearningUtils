@@ -14,6 +14,9 @@ class UNetDecoder(keras.layers.Layer):
         super(UNetDecoder, self).__init__(**kwargs)
         self.filter_sizes = filter_sizes
         self.activation = activation
+        self.transpose = transpose
+        self.use_norm = use_norm
+        self.accum_steps = accum_steps
         self.conv_layers = []
         self.bn_layers = []
         self.activation_layers = []
@@ -76,3 +79,14 @@ class UNetDecoder(keras.layers.Layer):
         x = self.output_conv(x)
 
         return x
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "filter_sizes": self.filter_sizes,
+            "activation": self.activation,
+            "transpose": self.transpose,
+            "use_norm": self.use_norm,
+            "accum_steps": self.accum_steps,
+        })
+        return config
