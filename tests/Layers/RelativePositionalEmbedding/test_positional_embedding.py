@@ -78,3 +78,67 @@ def test_positional_embedding_layer(query_shape, key_shape, query_dim, heads, dr
 
     # Compare JIT results
     np.testing.assert_allclose(torch_output, pytorch_jit_result, rtol=1e-5, atol=1e-5)
+
+
+def test_positional_embedding_save_load(tmp_path):
+    """Test that RelativePositionalEmbedding2D can be saved and loaded with non-default parameters."""
+    # Non-default parameters
+    query_shape = (2, 8, 8, 32)  # different from default
+    key_shape = (2, 8, 8, 32)
+    query_dim = 32
+    heads = 4  # default test uses 8
+    drop_rate = 0.1  # default is 0.0
+
+    # Create Keras layer with non-default parameters
+    keras_layer = KerasRelativePositionalEmbedding2D(
+        query_shape=query_shape,
+        key_shape=key_shape,
+        query_dim=query_dim,
+        heads=heads,
+        drop_rate=drop_rate
+    )
+
+    batch_size = 1
+    query_seq_len, query_height, query_width, _ = query_shape
+    key_seq_len, key_height, key_width, _ = key_shape
+
+    # Build functional model
+    query_input = keras.Input(shape=(heads, query_seq_len * query_height * query_width, query_dim))
+    scores_input = keras.Input(shape=(heads, query_seq_len * query_height * query_width, key_seq_len * key_height * key_width))
+
+    output = keras_layer([query_input, scores_input])
+    model = keras.Model(inputs=[query_input, scores_input], outputs=output)
+
+    # Create test inputs
+    input_query = np.random.rand(batch_size, heads, query_seq_len * query_height * query_width, query_dim).astype(np.float32)
+    input_scores = np.random.rand(batch_size, heads, query_seq_len * query_height * query_width, key_seq_len * key_height * key_width).astype(np.float32)
+
+    # Get output before saving
+    original_output = model.predict([input_query, input_scores])
+
+    # Save the model
+    model_path = tmp_path / "positional_embedding_model.keras"
+    model.save(model_path)
+
+    # Load the model
+    loaded_model = keras.models.load_model(model_path)
+
+    # Get output after loading
+    loaded_output = loaded_model.predict([input_query, input_scores])
+
+    # Compare outputs
+    np.testing.assert_allclose(original_output, loaded_output, rtol=1e-5, atol=1e-5)
+
+    # Verify that non-default parameters are preserved
+    loaded_layer = None
+    for layer in loaded_model.layers:
+        if isinstance(layer, KerasRelativePositionalEmbedding2D):
+            loaded_layer = layer
+            break
+
+    assert loaded_layer is not None, "RelativePositionalEmbedding2D layer not found in loaded model"
+    assert loaded_layer.config.query_shape == query_shape, f"Expected query_shape={query_shape}, got {loaded_layer.config.query_shape}"
+    assert loaded_layer.config.key_shape == key_shape, f"Expected key_shape={key_shape}, got {loaded_layer.config.key_shape}"
+    assert loaded_layer.config.query_dim == query_dim, f"Expected query_dim={query_dim}, got {loaded_layer.config.query_dim}"
+    assert loaded_layer.config.heads == heads, f"Expected heads={heads}, got {loaded_layer.config.heads}"
+    assert loaded_layer.config.drop_rate == drop_rate, f"Expected drop_rate={drop_rate}, got {loaded_layer.config.drop_rate}"

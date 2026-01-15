@@ -349,6 +349,19 @@ class RotaryPositionalEncoding2D(keras.layers.Layer):
         })
         return config
 
+    @classmethod
+    def from_config(cls, config):
+        """
+        Create layer from config dictionary.
+        
+        Args:
+            config: Configuration dictionary from get_config().
+            
+        Returns:
+            New layer instance with the specified configuration.
+        """
+        return cls(**config)
+
     def compute_output_spec(self, input_spec: keras.KerasTensor) -> keras.KerasTensor:
         """
         Compute output spec for shape inference during model loading.

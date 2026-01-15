@@ -276,6 +276,15 @@ class RelativePositionalEmbedding2D(keras.layers.Layer):
         })
         return config
 
+    @classmethod
+    def from_config(cls, config):
+        # Convert lists back to tuples (JSON serialization converts tuples to lists)
+        if 'query_shape' in config and isinstance(config['query_shape'], list):
+            config['query_shape'] = tuple(config['query_shape'])
+        if 'key_shape' in config and isinstance(config['key_shape'], list):
+            config['key_shape'] = tuple(config['key_shape'])
+        return cls(**config)
+
 
 class RelativePositionalEmbedding2DKey(keras.layers.Layer):
     """
@@ -518,3 +527,12 @@ class RelativePositionalEmbedding2DKey(keras.layers.Layer):
             'drop_rate': self.config.drop_rate,
         })
         return config
+
+    @classmethod
+    def from_config(cls, config):
+        # Convert lists back to tuples (JSON serialization converts tuples to lists)
+        if 'query_shape' in config and isinstance(config['query_shape'], list):
+            config['query_shape'] = tuple(config['query_shape'])
+        if 'key_shape' in config and isinstance(config['key_shape'], list):
+            config['key_shape'] = tuple(config['key_shape'])
+        return cls(**config)

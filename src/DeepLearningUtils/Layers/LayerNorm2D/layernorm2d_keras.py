@@ -40,3 +40,11 @@ class LayerNorm2d(keras.layers.Layer):
         x = (x - u) / keras.ops.sqrt(s + self.eps)
         x = self.weight[None, None, :] * x + self.bias[None, None, :]
         return x
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "num_channels": self.num_channels,
+            "eps": self.eps,
+        })
+        return config
