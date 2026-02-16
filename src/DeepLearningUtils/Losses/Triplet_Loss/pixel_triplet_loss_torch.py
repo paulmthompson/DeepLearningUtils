@@ -21,6 +21,7 @@ from .triplet_loss_torch import (
     _get_anchor_negative_triplet_mask,
     _get_triplet_mask,
 )
+import torch.utils.checkpoint
 
 
 def _get_anchor_positive_triplet_mask_exclude_background(labels: torch.Tensor) -> torch.Tensor:
@@ -96,6 +97,7 @@ class PixelTripletConfig:
     max_samples_per_class: Optional[int] = None
     use_balanced_sampling: bool = True
     strict_per_class_balancing: bool = False
+    background_sampling_fraction: Optional[float] = None
     distance_metric: str = "euclidean"
     triplet_strategy: str = "semi_hard"
     reduction: str = "mean"
@@ -106,6 +108,11 @@ class PixelTripletConfig:
     use_exact: bool = False
     batch_size_for_exact: int = 100
     class_balanced_weighting: bool = False
+    
+    # Upsampling
+    upsampling_mode: str = "nearest"
+    align_corners: bool = False
+
 
     def __post_init__(self):
         if self.margin <= 0:
@@ -124,12 +131,23 @@ class PixelTripletConfig:
             raise ValueError(f"reduction must be one of ['mean', 'sum', 'none'], got {self.reduction}")
         if self.batch_size_for_exact <= 0:
             raise ValueError(f"batch_size_for_exact must be > 0, got {self.batch_size_for_exact}")
+        if self.upsampling_mode not in ["nearest", "bilinear", "bicubic"]:
+             raise ValueError(f"upsampling_mode must be one of ['nearest', 'bilinear', 'bicubic'], got {self.upsampling_mode}")
 
         # class_balanced_weighting requires use_exact
         if self.class_balanced_weighting and not self.use_exact:
             print("Warning: class_balanced_weighting=True requires use_exact=True. "
                   "Setting use_exact=True automatically.")
             object.__setattr__(self, 'use_exact', True)
+
+        if self.use_exact and self.batch_size_for_exact < 16:
+            warnings.warn(
+                f"batch_size_for_exact={self.batch_size_for_exact} is very small. "
+                "This may cause significant slowdowns and potential OOM due to "
+                "excessive gradient checkpointing overhead. "
+                "Recommended value is >= 50.",
+                UserWarning
+            )
 
         # Provide guidance on the new parameters
         if self.use_balanced_sampling and self.max_samples_per_class is None:
@@ -263,39 +281,138 @@ class PixelTripletLoss(nn.Module):
     ) -> torch.Tensor:
         """
         Custom implementation of batch all triplet loss with configurable distance metrics.
+        Uses chunking and checkpointing to avoid O(N^3) memory usage.
         """
-        # Get the pairwise distance matrix using the configured metric
+        num_pixels = embeddings.size(0)
+        # Use batch_size_for_exact to control chunk size even for sampling method
+        batch_size = self.config.batch_size_for_exact
+        # Default to a reasonable chunk size if batch_size_for_exact is essentially disabled/too small
+        if batch_size < 1: 
+             batch_size = 1000
+             
+        num_batches = (num_pixels + batch_size - 1) // batch_size
+        device = embeddings.device
+
+        # Initialize accumulator with dependency on input to prevent JIT optimization
+        loss_sum = embeddings[0].sum() * 0.0
+        triplet_count = torch.tensor(0.0, device=device)
+        positive_triplet_count = torch.tensor(0.0, device=device)
+
+        # Helper: Process one chunk of anchors (to be checkpointed)
+        def chunk_fn(start_idx, end_idx, embeddings_ref, labels_ref, pairwise_dist_ref):
+            actual_batch_size = end_idx - start_idx
+            
+            # Anchor indices for this chunk
+            chunk_indices = torch.arange(start_idx, end_idx, device=device)
+            
+            # Slice pairwise distances: (chunk_size, N)
+            # pairwise_dist is (N, N), we take rows [start:end]
+            anchor_distances = pairwise_dist_ref[start_idx:end_idx, :]
+            
+            # Labels
+            anchor_labels = labels_ref[start_idx:end_idx] # (chunk_size, )
+            all_labels = labels_ref # (N, )
+            
+            # Masks
+            anchor_labels_exp = anchor_labels.unsqueeze(1) # (chunk_size, 1)
+            all_labels_exp = all_labels.unsqueeze(0)       # (1, N)
+            
+            same_class = anchor_labels_exp == all_labels_exp
+            diff_class = ~same_class
+            anchor_non_bg = anchor_labels > 0
+            anchor_non_bg_exp = anchor_non_bg.unsqueeze(1)
+            
+            # Identity mask (a != p, a != n)
+            # We are comparing chunk_indices (start...end) vs all_indices (0...N)
+            all_indices = torch.arange(num_pixels, device=device)
+            self_mask = chunk_indices.unsqueeze(1) == all_indices.unsqueeze(0)
+            not_self = ~self_mask
+            
+            positive_mask = same_class & not_self & anchor_non_bg_exp
+            negative_mask = diff_class
+            
+            # Prepare shape for broadcasting
+            # anchor_distances: (chunk, N)
+            # anchor_positive_dist: (chunk, N, 1)
+            # anchor_negative_dist: (chunk, 1, N) -> We need (chunk, 1, N) but we want to form triplets
+            
+            # Local accumulation
+            b_loss_val = torch.tensor(0.0, device=device)
+            b_t_count = torch.tensor(0.0, device=device)
+            b_pos_t_count = torch.tensor(0.0, device=device)
+            
+            # JIT dummy dependency
+            dummy_loss = 0.0 * embeddings_ref.sum()
+            b_loss_val = b_loss_val + dummy_loss
+            
+            # We must iterate inside chunk if 'remove_easy' is on, or do smarter vectorization
+            # If we try to broadcast (chunk, N, 1) - (chunk, 1, N) -> (chunk, N, N)
+            # If chunk=1000, N=2000, Result = 1000*2000*2000 = 4 billion floats = 16GB.
+            # This is still big if N is large.
+            # BUT efficient sampling means N is usually ~2000-4000. 16GB might fit or be tight on 24GB.
+            # If N=6000 (3 classes * 2000), 1000*6000*6000 is HUGE (36 billion).
+            
+            # So we typically iterate per anchor inside the chunk to avoid (N, N, N) explosion even within chunk.
+            
+            for i in range(actual_batch_size):
+                if not anchor_non_bg[i]:
+                     continue
+                
+                pos_mask_i = positive_mask[i]
+                neg_mask_i = negative_mask[i]
+                
+                dist_i = anchor_distances[i] # (N,)
+                
+                pos_dists = dist_i[pos_mask_i]
+                neg_dists = dist_i[neg_mask_i]
+                
+                if len(pos_dists) == 0 or len(neg_dists) == 0:
+                    continue
+                
+                # Expand (P, 1) - (1, Neg) -> (P, Neg) matrix of triplets
+                pos_exp = pos_dists.unsqueeze(1)
+                neg_exp = neg_dists.unsqueeze(0)
+                
+                diff = pos_exp - neg_exp + self.config.margin
+                
+                if self.config.remove_easy_triplets:
+                    diff = torch.clamp(diff, min=0.0)
+                    valid_triplets_count = (diff > 1e-16).float().sum()
+                    b_loss_val += diff.sum()
+                    b_pos_t_count += valid_triplets_count
+                else:
+                    # Keep all
+                    b_loss_val += diff.sum()
+                    b_t_count += float(len(pos_dists) * len(neg_dists))
+            
+            return b_loss_val, b_t_count, b_pos_t_count
+
+        # Get pairwise distances once (O(N^2))
         pairwise_dist = self._compute_pairwise_distances(embeddings)
-        
-        anchor_positive_dist = pairwise_dist.unsqueeze(2)
-        anchor_negative_dist = pairwise_dist.unsqueeze(1)
-        
-        # Compute a 3D tensor of size (batch_size, batch_size, batch_size)
-        triplet_loss = anchor_positive_dist - anchor_negative_dist + self.config.margin
-        
-        # Put to zero the invalid triplets (exclude background positives)
-        mask = _get_triplet_mask_exclude_background(labels)
-        mask = mask.float()
-        triplet_loss = mask * triplet_loss
-        
-        num_valid_triplets = mask.sum()
-        
-        # Handle easy triplets based on configuration
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_pixels)
+
+            if self.training and embeddings.requires_grad:
+                 b_loss, b_t_count, b_pos_t_count = torch.utils.checkpoint.checkpoint(
+                    lambda e, l, p: chunk_fn(start_idx, end_idx, e, l, p),
+                    embeddings, 
+                    labels,
+                    pairwise_dist,
+                    use_reentrant=True
+                 )
+            else:
+                b_loss, b_t_count, b_pos_t_count = chunk_fn(start_idx, end_idx, embeddings, labels, pairwise_dist)
+
+            loss_sum = loss_sum + b_loss
+            triplet_count = triplet_count + b_t_count
+            positive_triplet_count = positive_triplet_count + b_pos_t_count
+
         if self.config.remove_easy_triplets:
-            # Remove negative losses (i.e. the easy triplets)
-            triplet_loss = torch.clamp(triplet_loss, min=0.0)
-            
-            # Count number of positive triplets (where triplet_loss > 0)
-            valid_triplets = (triplet_loss > 1e-16).float()
-            num_positive_triplets = valid_triplets.sum()
-            
-            # Get final mean triplet loss over the positive valid triplets
-            triplet_loss = triplet_loss.sum() / (num_positive_triplets + 1e-16)
+            return loss_sum / (positive_triplet_count + 1e-16)
         else:
-            # Include easy triplets (typical literature behavior)
-            triplet_loss = triplet_loss.sum() / (num_valid_triplets + 1e-16)
-        
-        return triplet_loss
+            return loss_sum / (triplet_count + 1e-16)
 
     def _compute_distances_from_anchors(
         self,
@@ -330,7 +447,7 @@ class PixelTripletLoss(nn.Module):
         embeddings: torch.Tensor
     ) -> torch.Tensor:
         """
-        Batch hard triplet loss using loop-based exact computation.
+        Batch hard triplet loss using loop-based exact computation and checkpointing.
         Memory usage is O(batch_size * N) instead of O(N^2).
         """
         num_pixels = embeddings.size(0)
@@ -338,75 +455,86 @@ class PixelTripletLoss(nn.Module):
         num_batches = (num_pixels + batch_size - 1) // batch_size
         device = embeddings.device
 
-        all_labels = labels
-
-        loss_sum = torch.tensor(0.0, device=device)
+        # Initialize accumulator with dependency on input to prevent JIT optimization
+        loss_sum = embeddings[0].sum() * 0.0
         valid_anchor_count = torch.tensor(0.0, device=device)
 
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, num_pixels)
-
-            anchor_embeddings = embeddings[start_idx:end_idx]  # (B, D)
-            anchor_labels = labels[start_idx:end_idx]  # (B,)
-
+        # Helper: Process one chunk of anchors (to be checkpointed)
+        def chunk_fn(start_idx, end_idx, embeddings_ref, labels_ref):
+            # Re-slice inside the checkpointed function
+            anchor_embeddings = embeddings_ref[start_idx:end_idx]
+            anchor_labels = labels_ref[start_idx:end_idx]
+            
             # Compute distances from anchors to all pixels
-            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)  # (B, N)
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings_ref)
 
-            # Create label masks
-            anchor_labels_exp = anchor_labels.unsqueeze(1)  # (B, 1)
-            all_labels_exp = all_labels.unsqueeze(0)  # (1, N)
+            anchor_labels_exp = anchor_labels.unsqueeze(1)
+            all_labels_exp = labels_ref.unsqueeze(0)
 
-            # Positive mask: same class, not self, anchor is non-background
-            same_class = anchor_labels_exp == all_labels_exp  # (B, N)
-            anchor_non_bg = anchor_labels > 0  # (B,)
-            anchor_non_bg_exp = anchor_non_bg.unsqueeze(1)  # (B, 1)
+            same_class = anchor_labels_exp == all_labels_exp
+            anchor_non_bg = anchor_labels > 0
+            anchor_non_bg_exp = anchor_non_bg.unsqueeze(1)
 
-            # Self mask
             batch_indices = torch.arange(start_idx, end_idx, device=device)
             all_indices = torch.arange(num_pixels, device=device)
             self_mask = batch_indices.unsqueeze(1) == all_indices.unsqueeze(0)
             not_self = ~self_mask
 
-            # Valid positive: same class, not self, anchor is foreground
             positive_mask = same_class & not_self & anchor_non_bg_exp
-
-            # Negative mask: different class
             negative_mask = ~same_class
 
             positive_mask_float = positive_mask.float()
             negative_mask_float = negative_mask.float()
 
-            # For hardest positive: max distance among positives
             masked_positive_dist = distances * positive_mask_float + (1.0 - positive_mask_float) * (-1e9)
-            hardest_positive_dist, _ = masked_positive_dist.max(dim=1)  # (B,)
+            hardest_positive_dist, _ = masked_positive_dist.max(dim=1)
 
-            # For hardest negative: min distance among negatives
             masked_negative_dist = distances + (1.0 - negative_mask_float) * 1e9
-            hardest_negative_dist, _ = masked_negative_dist.min(dim=1)  # (B,)
+            hardest_negative_dist, _ = masked_negative_dist.min(dim=1)
 
-            # Scaling factor (mean of negative distances)
             neg_sum = (distances * negative_mask_float).sum(dim=1)
             neg_count = negative_mask_float.sum(dim=1)
             scaling = neg_sum / (neg_count + 1e-16)
 
-            # Compute triplet loss for each anchor
             triplet_loss = torch.clamp(
                 (hardest_positive_dist - hardest_negative_dist) / (scaling + 1e-16) + self.config.margin,
                 min=0.0
             )
 
-            # Only count anchors that have valid positives
             has_valid_positive = positive_mask.any(dim=1)
             has_valid_negative = negative_mask.any(dim=1)
             valid_anchor = has_valid_positive & has_valid_negative
             valid_anchor_float = valid_anchor.float()
 
-            batch_loss = (triplet_loss * valid_anchor_float).sum()
-            batch_count = valid_anchor_float.sum()
+            # Local accumulation
+            b_loss_val = torch.tensor(0.0, device=device)
+            b_count = torch.tensor(0.0, device=device)
+            
+            # Dummy dependency
+            dummy_loss = 0.0 * embeddings_ref.sum()
+            b_loss_val = b_loss_val + dummy_loss
+            
+            b_loss_val += (triplet_loss * valid_anchor_float).sum()
+            b_count += valid_anchor_float.sum()
+            
+            return b_loss_val, b_count
 
-            loss_sum = loss_sum + batch_loss
-            valid_anchor_count = valid_anchor_count + batch_count
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_pixels)
+
+            if self.training and embeddings.requires_grad:
+                 b_loss, b_count = torch.utils.checkpoint.checkpoint(
+                    lambda e, l: chunk_fn(start_idx, end_idx, e, l),
+                    embeddings, 
+                    labels,
+                    use_reentrant=True
+                 )
+            else:
+                b_loss, b_count = chunk_fn(start_idx, end_idx, embeddings, labels)
+            
+            loss_sum = loss_sum + b_loss
+            valid_anchor_count = valid_anchor_count + b_count
 
         return loss_sum / (valid_anchor_count + 1e-16)
 
@@ -416,7 +544,7 @@ class PixelTripletLoss(nn.Module):
         embeddings: torch.Tensor
     ) -> torch.Tensor:
         """
-        Batch all triplet loss using loop-based exact computation.
+        Batch all triplet loss using loop-based exact computation and checkpointing.
         Memory usage is O(batch_size * N) instead of O(N^3).
         """
         num_pixels = embeddings.size(0)
@@ -424,24 +552,21 @@ class PixelTripletLoss(nn.Module):
         num_batches = (num_pixels + batch_size - 1) // batch_size
         device = embeddings.device
 
-        all_labels = labels
-
-        loss_sum = torch.tensor(0.0, device=device)
+        # Initialize accumulator with dependency on input to prevent JIT optimization
+        loss_sum = embeddings[0].sum() * 0.0
         triplet_count = torch.tensor(0.0, device=device)
         positive_triplet_count = torch.tensor(0.0, device=device)
 
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, num_pixels)
+        # Helper: Process one chunk of anchors (to be checkpointed)
+        def chunk_fn(start_idx, end_idx, embeddings_ref, labels_ref):
             actual_batch_size = end_idx - start_idx
+            anchor_embeddings = embeddings_ref[start_idx:end_idx]
+            anchor_labels = labels_ref[start_idx:end_idx]
 
-            anchor_embeddings = embeddings[start_idx:end_idx]
-            anchor_labels = labels[start_idx:end_idx]
-
-            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings_ref)
 
             anchor_labels_exp = anchor_labels.unsqueeze(1)
-            all_labels_exp = all_labels.unsqueeze(0)
+            all_labels_exp = labels_ref.unsqueeze(0)
 
             same_class = anchor_labels_exp == all_labels_exp
             diff_class = ~same_class
@@ -456,14 +581,16 @@ class PixelTripletLoss(nn.Module):
             positive_mask = same_class & not_self & anchor_non_bg_exp
             negative_mask = diff_class
 
-            positive_mask_float = positive_mask.float()
-            negative_mask_float = negative_mask.float()
-
-            pos_count = positive_mask_float.sum(dim=1)
-            neg_count = negative_mask_float.sum(dim=1)
+            # Local accumulation
+            b_loss_val = torch.tensor(0.0, device=device)
+            b_t_count = torch.tensor(0.0, device=device)
+            b_pos_t_count = torch.tensor(0.0, device=device)
+            
+            # Ensure loss_val is part of the graph even if filtered (prevents checkpoint error)
+            dummy_loss = 0.0 * embeddings_ref.sum()
+            b_loss_val = b_loss_val + dummy_loss
 
             if self.config.remove_easy_triplets:
-                # Need to compute each triplet individually
                 for anchor_idx in range(actual_batch_size):
                     anchor_distances = distances[anchor_idx]
                     anchor_pos_mask = positive_mask[anchor_idx]
@@ -478,40 +605,54 @@ class PixelTripletLoss(nn.Module):
                     pos_dists = anchor_distances[pos_indices]
                     neg_dists = anchor_distances[neg_indices]
 
-                    # Compute all pairwise triplet losses
                     pos_expanded = pos_dists.unsqueeze(1)
                     neg_expanded = neg_dists.unsqueeze(0)
 
                     triplet_losses = pos_expanded - neg_expanded + self.config.margin
                     triplet_losses = torch.clamp(triplet_losses, min=0.0)
 
-                    anchor_loss = triplet_losses.sum()
-                    anchor_total_triplets = float(len(pos_indices) * len(neg_indices))
-                    anchor_positive_triplets = (triplet_losses > 1e-16).float().sum()
-
-                    loss_sum = loss_sum + anchor_loss
-                    triplet_count = triplet_count + anchor_total_triplets
-                    positive_triplet_count = positive_triplet_count + anchor_positive_triplets
+                    b_loss_val += triplet_losses.sum()
+                    b_t_count += float(len(pos_indices) * len(neg_indices))
+                    b_pos_t_count += (triplet_losses > 1e-16).float().sum()
             else:
-                # Efficient computation
+                positive_mask_float = positive_mask.float()
+                negative_mask_float = negative_mask.float()
+                
+                pos_count = positive_mask_float.sum(dim=1)
+                neg_count = negative_mask_float.sum(dim=1)
+                
                 pos_dist_sum = (distances * positive_mask_float).sum(dim=1)
                 neg_dist_sum = (distances * negative_mask_float).sum(dim=1)
                 triplets_per_anchor = pos_count * neg_count
 
-                anchor_loss = (
+                anchor_losses = (
                     pos_dist_sum * neg_count -
                     neg_dist_sum * pos_count +
                     self.config.margin * triplets_per_anchor
                 )
 
-                valid_anchor = triplets_per_anchor > 0
-                valid_anchor_float = valid_anchor.float()
+                b_loss_val += anchor_losses.sum()
+                b_t_count += triplets_per_anchor.sum()
+                
+            return b_loss_val, b_t_count, b_pos_t_count
 
-                batch_loss = (anchor_loss * valid_anchor_float).sum()
-                batch_count = (triplets_per_anchor * valid_anchor_float).sum()
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_pixels)
 
-                loss_sum = loss_sum + batch_loss
-                triplet_count = triplet_count + batch_count
+            if self.training and embeddings.requires_grad:
+                b_loss, b_t_count, b_pos_t_count = torch.utils.checkpoint.checkpoint(
+                    lambda e, l: chunk_fn(start_idx, end_idx, e, l),
+                    embeddings, 
+                    labels,
+                    use_reentrant=True
+                )
+            else:
+                b_loss, b_t_count, b_pos_t_count = chunk_fn(start_idx, end_idx, embeddings, labels)
+
+            loss_sum = loss_sum + b_loss
+            triplet_count = triplet_count + b_t_count
+            positive_triplet_count = positive_triplet_count + b_pos_t_count
 
         if self.config.remove_easy_triplets:
             return loss_sum / (positive_triplet_count + 1e-16)
@@ -524,30 +665,30 @@ class PixelTripletLoss(nn.Module):
         embeddings: torch.Tensor
     ) -> torch.Tensor:
         """
-        Batch hard triplet loss with class-balanced weighting.
+        Batch hard triplet loss with class-balanced weighting using exact computation and checkpointing.
         """
         num_pixels = embeddings.size(0)
         batch_size = self.config.batch_size_for_exact
         num_batches = (num_pixels + batch_size - 1) // batch_size
         device = embeddings.device
-
-        all_labels = labels
+        
+        # Max classes assumption (matches previous code)
         max_classes = 100
-
-        loss_per_class = torch.zeros(max_classes, device=device)
+        
+        # Accumulators for loss and counts per class
+        # Add dependency to ensure graph connectivity from start
+        loss_per_class = torch.zeros(max_classes, device=device) + embeddings[0].sum() * 0.0
         count_per_class = torch.zeros(max_classes, device=device)
 
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, num_pixels)
-
-            anchor_embeddings = embeddings[start_idx:end_idx]
-            anchor_labels = labels[start_idx:end_idx]
-
-            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)
+        # Helper: Process one chunk of anchors (to be checkpointed)
+        def chunk_fn(start_idx, end_idx, embeddings_ref, labels_ref):
+            anchor_embeddings = embeddings_ref[start_idx:end_idx]
+            anchor_labels = labels_ref[start_idx:end_idx]
+            
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings_ref)
 
             anchor_labels_exp = anchor_labels.unsqueeze(1)
-            all_labels_exp = all_labels.unsqueeze(0)
+            all_labels_exp = labels_ref.unsqueeze(0)
 
             same_class = anchor_labels_exp == all_labels_exp
             anchor_non_bg = anchor_labels > 0
@@ -582,15 +723,41 @@ class PixelTripletLoss(nn.Module):
             has_valid_negative = negative_mask.any(dim=1)
             valid_anchor = has_valid_positive & has_valid_negative
             valid_anchor_float = valid_anchor.float()
+            
+            # Local accumulation
+            b_loss_per_class = torch.zeros(max_classes, device=device)
+            b_count_per_class = torch.zeros(max_classes, device=device)
+            
+            # Ensure gradients flow even if no valid anchors
+            dummy_loss = 0.0 * embeddings_ref.sum()
+            b_loss_per_class = b_loss_per_class + dummy_loss
 
-            # Accumulate per anchor class
             anchor_labels_clipped = torch.clamp(anchor_labels, 0, max_classes - 1)
             
             for i in range(len(anchor_labels_clipped)):
-                class_idx = anchor_labels_clipped[i].item()
                 if valid_anchor_float[i] > 0:
-                    loss_per_class[class_idx] += triplet_loss[i]
-                    count_per_class[class_idx] += valid_anchor_float[i]
+                    class_idx = anchor_labels_clipped[i].item()
+                    b_loss_per_class[class_idx] += triplet_loss[i]
+                    b_count_per_class[class_idx] += valid_anchor_float[i]
+            
+            return b_loss_per_class, b_count_per_class
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_pixels)
+
+            if self.training and embeddings.requires_grad:
+                 b_loss_p_c, b_count_p_c = torch.utils.checkpoint.checkpoint(
+                    lambda e, l: chunk_fn(start_idx, end_idx, e, l),
+                    embeddings, 
+                    labels,
+                    use_reentrant=True
+                 )
+            else:
+                b_loss_p_c, b_count_p_c = chunk_fn(start_idx, end_idx, embeddings, labels)
+            
+            loss_per_class = loss_per_class + b_loss_p_c
+            count_per_class = count_per_class + b_count_p_c
 
         # Compute mean loss per class
         mean_loss_per_class = loss_per_class / (count_per_class + 1e-16)
@@ -610,32 +777,30 @@ class PixelTripletLoss(nn.Module):
         embeddings: torch.Tensor
     ) -> torch.Tensor:
         """
-        Batch all triplet loss with class-balanced weighting.
+        Batch all triplet loss with class-balanced weighting using exact computation and checkpointing.
         """
         num_pixels = embeddings.size(0)
         batch_size = self.config.batch_size_for_exact
         num_batches = (num_pixels + batch_size - 1) // batch_size
         device = embeddings.device
-
-        all_labels = labels
+        
         max_classes = 100
 
-        loss_per_class = torch.zeros(max_classes, device=device)
+        # Accumulators for loss and counts per class
+        loss_per_class = torch.zeros(max_classes, device=device) + embeddings[0].sum() * 0.0
         count_per_class = torch.zeros(max_classes, device=device)
         positive_count_per_class = torch.zeros(max_classes, device=device)
 
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, num_pixels)
+        # Helper: Process one chunk of anchors
+        def chunk_fn(start_idx, end_idx, embeddings_ref, labels_ref):
             actual_batch_size = end_idx - start_idx
+            anchor_embeddings = embeddings_ref[start_idx:end_idx]
+            anchor_labels = labels_ref[start_idx:end_idx]
 
-            anchor_embeddings = embeddings[start_idx:end_idx]
-            anchor_labels = labels[start_idx:end_idx]
-
-            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings)
+            distances = self._compute_distances_from_anchors(anchor_embeddings, embeddings_ref)
 
             anchor_labels_exp = anchor_labels.unsqueeze(1)
-            all_labels_exp = all_labels.unsqueeze(0)
+            all_labels_exp = labels_ref.unsqueeze(0)
 
             same_class = anchor_labels_exp == all_labels_exp
             diff_class = ~same_class
@@ -657,6 +822,15 @@ class PixelTripletLoss(nn.Module):
             neg_count = negative_mask_float.sum(dim=1)
 
             anchor_labels_clipped = torch.clamp(anchor_labels, 0, max_classes - 1)
+            
+            # Local accumulation
+            b_loss_per_class = torch.zeros(max_classes, device=device)
+            b_count_per_class = torch.zeros(max_classes, device=device)
+            b_pos_count_per_class = torch.zeros(max_classes, device=device)
+            
+            # Dummy dependency
+            dummy_loss = 0.0 * embeddings_ref.sum()
+            b_loss_per_class = b_loss_per_class + dummy_loss
 
             if self.config.remove_easy_triplets:
                 for anchor_idx in range(actual_batch_size):
@@ -680,9 +854,9 @@ class PixelTripletLoss(nn.Module):
                     triplet_losses = pos_expanded - neg_expanded + self.config.margin
                     triplet_losses = torch.clamp(triplet_losses, min=0.0)
 
-                    loss_per_class[class_idx] += triplet_losses.sum()
-                    count_per_class[class_idx] += float(len(pos_indices) * len(neg_indices))
-                    positive_count_per_class[class_idx] += (triplet_losses > 1e-16).float().sum()
+                    b_loss_per_class[class_idx] += triplet_losses.sum()
+                    b_count_per_class[class_idx] += float(len(pos_indices) * len(neg_indices))
+                    b_pos_count_per_class[class_idx] += (triplet_losses > 1e-16).float().sum()
             else:
                 pos_dist_sum = (distances * positive_mask_float).sum(dim=1)
                 neg_dist_sum = (distances * negative_mask_float).sum(dim=1)
@@ -697,8 +871,28 @@ class PixelTripletLoss(nn.Module):
                 for i in range(len(anchor_labels_clipped)):
                     class_idx = anchor_labels_clipped[i].item()
                     if triplets_per_anchor[i] > 0:
-                        loss_per_class[class_idx] += anchor_losses[i]
-                        count_per_class[class_idx] += triplets_per_anchor[i]
+                        b_loss_per_class[class_idx] += anchor_losses[i]
+                        b_count_per_class[class_idx] += triplets_per_anchor[i]
+            
+            return b_loss_per_class, b_count_per_class, b_pos_count_per_class
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_pixels)
+            
+            if self.training and embeddings.requires_grad:
+                 b_loss_p_c, b_count_p_c, b_pos_count_p_c = torch.utils.checkpoint.checkpoint(
+                    lambda e, l: chunk_fn(start_idx, end_idx, e, l),
+                    embeddings, 
+                    labels,
+                    use_reentrant=True
+                 )
+            else:
+                b_loss_p_c, b_count_p_c, b_pos_count_p_c = chunk_fn(start_idx, end_idx, embeddings, labels)
+
+            loss_per_class = loss_per_class + b_loss_p_c
+            count_per_class = count_per_class + b_count_p_c
+            positive_count_per_class = positive_count_per_class + b_pos_count_p_c
 
         # Compute mean loss per class
         if self.config.remove_easy_triplets:
@@ -739,7 +933,52 @@ class PixelTripletLoss(nn.Module):
         
         # Convert labels to class indices
         class_labels = self._labels_to_classes(y_true)
-        
+        if self.config.use_exact:
+            sampled_embeddings, sampled_labels = self._get_all_pixels(
+                y_pred_resized, class_labels
+            )
+            if self.config.class_balanced_weighting:
+                if self.config.triplet_strategy == "hard":
+                    loss = self._batch_hard_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+                elif self.config.triplet_strategy == "all":
+                    loss = self._batch_all_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+                else:
+                    loss = self._batch_hard_triplet_loss_exact_class_balanced(sampled_labels, sampled_embeddings)
+            else:
+                if self.config.triplet_strategy == "hard":
+                    loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+                elif self.config.triplet_strategy == "all":
+                    loss = self._batch_all_triplet_loss_exact(sampled_labels, sampled_embeddings)
+                else:
+                    loss = self._batch_hard_triplet_loss_exact(sampled_labels, sampled_embeddings)
+        elif self.config.use_balanced_sampling:
+            if self.config.strict_per_class_balancing:
+                sampled_embeddings, sampled_labels = self._sample_pixels_strict_balanced(
+                    y_pred_resized, class_labels
+                )
+            else:
+                sampled_embeddings, sampled_labels = self._sample_pixels_balanced(
+                    y_pred_resized, class_labels
+                )
+            if self.config.triplet_strategy == "hard":
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            elif self.config.triplet_strategy == "all":
+                loss = self._batch_all_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            else:
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+        else:
+            sampled_embeddings, sampled_labels = self._sample_pixels_per_class_simple(
+                y_pred_resized, class_labels
+            )
+            if self.config.triplet_strategy == "hard":
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            elif self.config.triplet_strategy == "all":
+                loss = self._batch_all_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            else:
+                loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
+            
+
+        """
         # Get pixels
         if self.config.class_balanced_weighting:
             sampled_embeddings, sampled_labels = self._get_all_pixels(
@@ -783,6 +1022,7 @@ class PixelTripletLoss(nn.Module):
             else:
                 loss = self._batch_hard_triplet_loss_custom(sampled_labels, sampled_embeddings)
 
+        """
         return loss
     
     def _resize_embeddings(
@@ -803,11 +1043,15 @@ class PixelTripletLoss(nn.Module):
         # Reshape for interpolation: (batch, h, w, channels) -> (batch, channels, h, w)
         embeddings_perm = embeddings.permute(0, 3, 1, 2)
         
-        # Use nearest neighbor interpolation
+        mode = self.config.upsampling_mode
+        align_corners = self.config.align_corners if mode != 'nearest' else None
+
+        # Use configurable interpolation
         resized = F.interpolate(
             embeddings_perm,
             size=(target_h, target_w),
-            mode='nearest'
+            mode=mode,
+            align_corners=align_corners
         )
         
         # Reshape back: (batch, channels, h, w) -> (batch, h, w, channels)
@@ -939,6 +1183,9 @@ class PixelTripletLoss(nn.Module):
         if final_embeddings.shape[0] == 0:
             final_embeddings = torch.zeros((2, feature_dim), dtype=torch.float32, device=device)
             final_labels = torch.tensor([0, 1], dtype=torch.long, device=device)
+            
+            # Dummy dependency for graph connectivity
+            final_embeddings = final_embeddings + 0.0 * embeddings.sum()
         
         return final_embeddings, final_labels
     
@@ -947,57 +1194,89 @@ class PixelTripletLoss(nn.Module):
         embeddings: torch.Tensor, 
         class_labels: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Strict per-class balanced sampling."""
+        """Strict per-class balanced sampling with oversampling."""
         device = embeddings.device
         feature_dim = embeddings.shape[-1]
         
         embeddings_flat = embeddings.reshape(-1, feature_dim)
         class_labels_flat = class_labels.reshape(-1)
         
-        # Get unique classes and counts
+        # Get unique classes
         unique_classes = torch.unique(class_labels_flat)
         
-        # Find minimum count across all classes
-        min_count = float('inf')
-        for class_id in unique_classes:
-            count = (class_labels_flat == class_id).sum().item()
-            min_count = min(min_count, count)
-        
         if self.config.max_samples_per_class is not None:
-            samples_per_class = min(int(min_count), self.config.max_samples_per_class)
+             target_samples = self.config.max_samples_per_class
         else:
-            samples_per_class = int(min_count)
+             target_samples = 1000
+
+        all_sampled_indices = []
         
-        samples_per_class = max(samples_per_class, 1)
-        
-        # Sample from each class
-        sampled_embeddings_list = []
-        sampled_labels_list = []
+        # Check if we need special background handling
+        use_bg_fraction = self.config.background_sampling_fraction is not None and \
+                          0.0 < self.config.background_sampling_fraction < 1.0
         
         for class_id in unique_classes:
+            # If using fraction, skip background (class 0) in this loop
+            if use_bg_fraction and class_id == 0:
+                continue
+
             class_mask = class_labels_flat == class_id
             class_indices = torch.where(class_mask)[0]
+            count = len(class_indices)
             
-            perm = torch.randperm(len(class_indices), device=device)[:samples_per_class]
-            sampled_indices = class_indices[perm]
+            if count == 0:
+                continue
+                
+            if count >= target_samples:
+                perm = torch.randperm(count, device=device)[:target_samples]
+                sampled_indices = class_indices[perm]
+            else:
+                 # Sample WITH replacement
+                indices = torch.randint(0, count, (target_samples,), device=device)
+                sampled_indices = class_indices[indices]
             
-            class_embeddings = embeddings_flat[sampled_indices]
-            class_labels_sampled = torch.full(
-                (samples_per_class,), 
-                class_id.item(), 
-                dtype=torch.long, 
-                device=device
-            )
+            all_sampled_indices.append(sampled_indices)
             
-            sampled_embeddings_list.append(class_embeddings)
-            sampled_labels_list.append(class_labels_sampled)
+        # Handle background sampling if fraction is specified
+        if use_bg_fraction:
+             # Calculate total foreground samples collected
+             total_fg_samples = sum(len(indices) for indices in all_sampled_indices)
+             
+             # Calculate required background samples to achieve the fraction
+             fraction = self.config.background_sampling_fraction
+             # bg / (bg + fg) = fraction
+             # bg = fraction * bg + fraction * fg
+             # bg * (1 - fraction) = fraction * fg
+             # bg = fg * fraction / (1 - fraction)
+             
+             if total_fg_samples > 0:
+                 target_bg = int(total_fg_samples * fraction / (1.0 - fraction))
+                 target_bg = max(1, target_bg) # Ensure at least 1
+                 
+                 bg_mask = class_labels_flat == 0
+                 bg_indices = torch.where(bg_mask)[0]
+                 bg_count = len(bg_indices)
+                 
+                 if bg_count > 0:
+                     if bg_count >= target_bg:
+                         perm = torch.randperm(bg_count, device=device)[:target_bg]
+                         bg_sampled = bg_indices[perm]
+                     else:
+                         indices = torch.randint(0, bg_count, (target_bg,), device=device)
+                         bg_sampled = bg_indices[indices]
+                     
+                     all_sampled_indices.append(bg_sampled)
         
-        if len(sampled_embeddings_list) > 0:
-            final_embeddings = torch.cat(sampled_embeddings_list, dim=0)
-            final_labels = torch.cat(sampled_labels_list, dim=0)
+        if len(all_sampled_indices) > 0:
+            final_indices = torch.cat(all_sampled_indices, dim=0)
+            final_embeddings = embeddings_flat[final_indices]
+            final_labels = class_labels_flat[final_indices]
         else:
             final_embeddings = torch.zeros((2, feature_dim), dtype=torch.float32, device=device)
             final_labels = torch.tensor([0, 1], dtype=torch.long, device=device)
+            
+            # Dummy dependency for graph connectivity
+            final_embeddings = final_embeddings + 0.0 * embeddings.sum()
         
         return final_embeddings, final_labels
 
