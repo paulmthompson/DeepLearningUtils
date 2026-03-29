@@ -70,6 +70,8 @@ class KeypointDataParser:
         self.labels_dir_name = labels_dir_name
         self.occlusion_markers = occlusion_markers
         self.return_numpy = return_numpy
+        self.load_all_images = True #Load all images in the label folder and pad labels with NaN if no label exists for an image
+        self.image_name_filter = lambda x: not x.startswith('.') #Filter to remove hidden files like .DS_Store on MacOS
 
     def extract_frame_number(self, filename: str) -> Union[int, str]:
         """
@@ -185,7 +187,15 @@ class KeypointDataParser:
                 print(f'Skipping {experiment_folder}: No images found')
                 continue
 
-            img_names = [os.path.basename(img) for img in image_paths]
+            img_names = []
+            filtered_image_paths = [] 
+            for img_path in image_paths:
+                img_name = os.path.basename(img_path)
+                if self.image_name_filter(img_name):
+                    img_names.append(img_name)
+                    filtered_image_paths.append(img_path)
+            image_paths = filtered_image_paths
+  
             img_frames = [self.extract_frame_number(img_name) for img_name in img_names]
             frame_to_path = dict(zip(img_frames, image_paths))
 
@@ -253,7 +263,16 @@ class KeypointDataParser:
                 keypoint_data[keypoint_name] = keypoint_coords
 
             # Get only images that have label entries
-            valid_frames = [frame for frame in img_frames if frame in labeled_frames]
+            if self.load_all_images:
+                valid_frames = img_frames
+                for frame in img_frames:
+                    if frame not in labeled_frames:
+                        # Pad with NaN if no label exists for an image
+                        print(f'No label for frame {frame} in {experiment_folder}, padding with NaN')
+                        for feature_idx, keypoint_name in enumerate(self.keypoint_names):
+                            keypoint_coords[frame] = None
+            else:
+                valid_frames = [frame for frame in img_frames if frame in labeled_frames]
             if not valid_frames:
                 print(f'No labeled frames found in {experiment_folder}')
                 continue
