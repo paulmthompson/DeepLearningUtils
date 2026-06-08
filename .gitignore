@@ -1,5 +1,5 @@
 .vscode
 .idea
 __pycache__
-DeepLearningUtils.egg-info
+*.egg-info
 docs/.Rproj.user
