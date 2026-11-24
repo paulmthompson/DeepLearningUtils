@@ -1,16 +1,20 @@
-"""
-Configuration dataclasses for sequential co-attention layers.
+"""Configuration dataclasses for sequential co-attention and memory attention layers.
 
-This module provides comprehensive configuration management for sequential co-attention
-mechanisms, ensuring type safety, validation, and immutability following established
-design guidelines.
-
-The configuration system supports both memory attention modules and full co-attention
-modules with temporal sequencing capabilities.
+Sizing Guidelines
+-----------------
+* **Routing (`key_dim`) vs. payload (`value_dim`) compression:** Keep
+  ``key_dim >= 0.5 * query_channels`` (at most ``2x`` Q/K routing compression) and
+  ``value_dim >= max(key_dim, 0.5 * memory_channels)`` (ideally ``0.67x-1.0x`` of
+  ``memory_channels``) so residual attention updates are not rank-bottlenecked.
+  Exceeding these compression ratios triggers a :class:`UserWarning` in ``__post_init__``.
+* **Head count (`attention_heads`):** Choose ``attention_heads`` so
+  ``d_head = key_dim // attention_heads >= 32`` (ideally ``48-64``) when paired with
+  2D RoPE (which allocates ``d_head // 4`` frequency pairs per spatial axis).
 """
 
 from dataclasses import dataclass
 from typing import Tuple, Union, Literal
+import warnings
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,24 @@ class CoMemoryAttentionConfig:
             flag_value = getattr(self, flag_name)
             if not isinstance(flag_value, bool):
                 raise TypeError(f"{flag_name} must be a boolean, got {type(flag_value)}")
+
+        q_channels = self.query_shape[3]
+        m_channels = self.memory_shape[3]
+        if self.key_dim * 2 < q_channels:
+            warnings.warn(
+                f"CoMemoryAttentionConfig key_dim ({self.key_dim}) < 0.5 * query_channels "
+                f"({q_channels}); > 2x Q/K routing compression risks discarding query variance.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if self.value_dim * 2 < m_channels or self.value_dim < self.key_dim:
+            warnings.warn(
+                f"CoMemoryAttentionConfig value_dim ({self.value_dim}) compresses aggressively "
+                f"relative to memory_channels ({m_channels}) or key_dim ({self.key_dim}); "
+                f"recommend value_dim >= max(key_dim, 0.5 * memory_channels).",
+                UserWarning,
+                stacklevel=2,
+            )
     
     @property
     def query_seq_len(self) -> int:
@@ -265,6 +287,24 @@ class CoAttentionConfig:
         # Validate epsilon
         if not isinstance(self.layer_norm_eps, float) or self.layer_norm_eps <= 0:
             raise ValueError(f"layer_norm_eps must be a positive float, got {self.layer_norm_eps}")
+
+        q_channels = self.query_shape[4]
+        m_channels = self.memory_shape[4]
+        if self.key_dim * 2 < q_channels:
+            warnings.warn(
+                f"CoAttentionConfig key_dim ({self.key_dim}) < 0.5 * query_channels "
+                f"({q_channels}); > 2x Q/K routing compression risks discarding query variance.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if self.value_dim * 2 < m_channels or self.value_dim < self.key_dim:
+            warnings.warn(
+                f"CoAttentionConfig value_dim ({self.value_dim}) compresses aggressively "
+                f"relative to memory_channels ({m_channels}) or key_dim ({self.key_dim}); "
+                f"recommend value_dim >= max(key_dim, 0.5 * memory_channels).",
+                UserWarning,
+                stacklevel=2,
+            )
     
     @property
     def batch_size(self) -> int:

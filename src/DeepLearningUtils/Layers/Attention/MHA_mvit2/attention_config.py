@@ -10,6 +10,7 @@ head configurations, and dropout settings for robust attention mechanisms.
 
 from dataclasses import dataclass
 from typing import Tuple, Literal
+import warnings
 
 AttentionType = Literal["softmax", "linear"]
 
@@ -131,7 +132,7 @@ class DotProductAttentionConfig:
             raise ValueError(
                 f"attention_type must be 'softmax' or 'linear', got '{self.attention_type}'"
             )
-        
+
         # Validate name
         if not isinstance(self.name, str):
             raise TypeError(f"name must be a string, got {type(self.name)}")
@@ -321,6 +322,26 @@ class MultiHeadAttentionConfig:
         if self.attention_type not in ["softmax", "linear"]:
             raise ValueError(
                 f"attention_type must be 'softmax' or 'linear', got '{self.attention_type}'"
+            )
+
+        q_channels = self.query_shape[3]
+        k_channels = self.key_shape[3]
+        if self.use_query_embedding and self.key_dim * 2 < q_channels:
+            warnings.warn(
+                f"MultiHeadAttentionConfig key_dim ({self.key_dim}) < 0.5 * query_channels "
+                f"({q_channels}); > 2x Q/K routing compression risks discarding query variance.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if self.use_value_embedding and (
+            self.value_dim * 2 < k_channels or self.value_dim < self.key_dim
+        ):
+            warnings.warn(
+                f"MultiHeadAttentionConfig value_dim ({self.value_dim}) compresses aggressively "
+                f"relative to key_channels ({k_channels}) or key_dim ({self.key_dim}); "
+                f"recommend value_dim >= max(key_dim, 0.5 * key_channels).",
+                UserWarning,
+                stacklevel=2,
             )
     
     @property

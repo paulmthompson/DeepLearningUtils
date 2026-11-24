@@ -1,13 +1,14 @@
-"""
-Configuration dataclass for RotaryPositionalEncoding2D layer.
+"""Configuration dataclass for Keras RotaryPositionalEncoding2D layers.
 
-This module provides a configuration structure for the Keras implementation
-of the RotaryPositionalEncoding2D layer, following company coding guidelines.
+For the PyTorch 2D axial RoPE implementation, configuration (:class:`AxialRotary2DConfig`),
+and self-/cross-attention and ``head_dim`` sizing best practices, see
+:mod:`DeepLearningUtils.Layers.RotaryPositionalEncoding.rotary2d_axial_pytorch`.
 """
 
 from dataclasses import dataclass
 from typing import Tuple
 import math
+import warnings
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,15 @@ class RotaryPositionalEncodingConfig:
         
         if self.max_freq <= 0:
             raise ValueError(f"max_freq must be positive, got {self.max_freq}")
+
+        if self.dim < 32:
+            warnings.warn(
+                f"RotaryPositionalEncodingConfig initialized with dim={self.dim} "
+                f"(freq_dim={self.dim // 2}); dim >= 32 is recommended for 2D spatial "
+                f"rotary selectivity.",
+                UserWarning,
+                stacklevel=2,
+            )
     
     @property
     def spatial_size(self) -> int:
